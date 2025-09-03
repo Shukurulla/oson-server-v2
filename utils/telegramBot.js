@@ -1,4 +1,4 @@
-// utils/telegramBot.js - enhanced version
+// utils/telegramBot.js - enhanced version with full Russian language
 
 import TelegramBot from "node-telegram-bot-api";
 import Doctor from "../models/Doctor.js";
@@ -39,7 +39,7 @@ const supplierMenu = {
   },
 };
 
-// Pagination buttonlarini yaratish
+// Pagination кнопок создание
 const createPaginationButtons = (currentPage, totalPages, prefix) => {
   const buttons = [];
   const maxButtons = 5;
@@ -56,14 +56,14 @@ const createPaginationButtons = (currentPage, totalPages, prefix) => {
 
   if (currentPage > 1) {
     row1.push({
-      text: "⬅️ Oldingi",
+      text: "⬅️ Предыдущая",
       callback_data: `${prefix}_page_${currentPage - 1}`,
     });
   }
 
   if (currentPage < totalPages) {
     row1.push({
-      text: "Keyingi ➡️",
+      text: "Следующая ➡️",
       callback_data: `${prefix}_page_${currentPage + 1}`,
     });
   }
@@ -78,7 +78,7 @@ const createPaginationButtons = (currentPage, totalPages, prefix) => {
 
   buttons.push([
     { text: `📄 ${currentPage}/${totalPages}`, callback_data: "info" },
-    { text: "❌ Yopish", callback_data: `${prefix}_close` },
+    { text: "❌ Закрыть", callback_data: `${prefix}_close` },
   ]);
 
   return {
@@ -88,7 +88,7 @@ const createPaginationButtons = (currentPage, totalPages, prefix) => {
   };
 };
 
-// Vaqtni formatlash
+// Время форматирование
 const formatDateTime = (date) => {
   const d = new Date(date);
   const dateStr = d.toLocaleDateString("ru-RU");
@@ -99,18 +99,18 @@ const formatDateTime = (date) => {
   return `${dateStr} ${timeStr}`;
 };
 
-// Raqamlarni formatlash
+// Числа форматирование
 const formatNumber = (num) => {
   return new Intl.NumberFormat("ru-RU").format(num);
 };
 
-// Foizni formatlash
+// Процентов форматирование
 const formatPercentage = (value, total) => {
   if (total === 0) return "0%";
   return `${Math.round((value / total) * 100)}%`;
 };
 
-// Professional statistika message yaratish
+// Профессиональная статистика сообщение создание
 const createProfessionalStatisticsMessage = (supplier, stats) => {
   const {
     totalProducts,
@@ -237,10 +237,10 @@ const createProfessionalStatisticsMessage = (supplier, stats) => {
   return message;
 };
 
-// Supplier statistikasini hisoblash
+// Поставщик статистики рассчет
 const calculateSupplierStatistics = async (supplierName) => {
   try {
-    // Asosiy aggregation
+    // Основной aggregation
     const pipeline = [
       { $match: { manufacturer: supplierName } },
       {
@@ -261,7 +261,7 @@ const calculateSupplierStatistics = async (supplierName) => {
 
     const groupedData = await Remains.aggregate(pipeline);
 
-    // Products bo'yicha guruhlash
+    // Products по группировка
     const productStats = new Map();
     let totalQuantity = 0;
     let totalValue = 0;
@@ -294,11 +294,11 @@ const calculateSupplierStatistics = async (supplierName) => {
       if (item.location) product.locations.add(item.location);
     });
 
-    // Statistikalarni hisoblash
+    // Статистика рассчет
     const products = Array.from(productStats.values());
     const totalProducts = products.length;
 
-    // Low stock va critical stock hisoblash
+    // Low stock ва critical stock рассчет
     let lowStock = 0;
     let criticalStock = 0;
 
@@ -323,7 +323,7 @@ const calculateSupplierStatistics = async (supplierName) => {
         branches: product.branches.size,
       }));
 
-    // Stock health hisoblash
+    // Stock health рассчет
     const healthyStock = totalProducts - lowStock - criticalStock;
     const stockHealth = Math.round((healthyStock / totalProducts) * 100);
 
@@ -354,7 +354,7 @@ const calculateSupplierStatistics = async (supplierName) => {
   }
 };
 
-// Sales ma'lumotlarini check number bo'yicha guruhlash (vaqt bilan)
+// Sales информацию чек номер по группировка (время с)
 const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   try {
     const sales = await Sales.find({
@@ -409,7 +409,7 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
       hasMore: page < totalPages,
     };
   } catch (error) {
-    console.error("Grouped sales sahifa olishda xato:", error);
+    console.error("Grouped sales страница получения ошибка:", error);
     return {
       checks: [],
       currentPage: 1,
@@ -421,7 +421,7 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   }
 };
 
-// Filial bo'yicha guruhlangan remains
+// Филиал по группированные остатки
 const getBranchGroupedRemainsPage = async (
   supplierName,
   page = 1,
@@ -464,7 +464,7 @@ const getBranchGroupedRemainsPage = async (
       hasMore: page < totalPages,
     };
   } catch (error) {
-    console.error("Branch grouped remains sahifa olishda xato:", error);
+    console.error("Branch grouped remains страница получения ошибка:", error);
     return {
       products: [],
       currentPage: 1,
@@ -475,7 +475,7 @@ const getBranchGroupedRemainsPage = async (
   }
 };
 
-// Grouped sales sahifasini formatlash (vaqt bilan)
+// Grouped sales страница форматирование (время с)
 const formatGroupedSalesPage = (pageData) => {
   if (pageData.checks.length === 0) {
     return "📊 *Продажи не найдены*";
@@ -519,7 +519,7 @@ const formatGroupedSalesPage = (pageData) => {
   return message;
 };
 
-// Branch grouped remains sahifasini formatlash
+// Branch grouped remains страница форматирование
 const formatBranchGroupedRemainsPage = (pageData) => {
   if (pageData.products.length === 0) {
     return "📦 *Остатки не найдены*";
@@ -536,7 +536,7 @@ const formatBranchGroupedRemainsPage = (pageData) => {
       product.unit || "шт"
     }\n\n`;
 
-    // Filiallar bo'yicha guruhlash
+    // Филиалы по группировка
     const branchGroups = new Map();
     product.branches.forEach((branch) => {
       const branchName = branch.branch || "Неизвестный филиал";
@@ -588,10 +588,10 @@ const formatBranchGroupedRemainsPage = (pageData) => {
   return message;
 };
 
-// Kam qoldiq tekshirish va notification jo'natish
+// Низкие остатки проверка и уведомление отправка
 const checkLowStockAndNotify = async () => {
   try {
-    console.log("🔍 Kam qoldiqlar tekshirilmoqda...");
+    console.log("🔍 Низкие остатки проверяются...");
 
     const suppliers = await Supplier.find({ isActive: true });
 
@@ -631,17 +631,17 @@ const checkLowStockAndNotify = async () => {
 
       if (lowStockItems.length > 0) {
         console.log(
-          `⚠️ ${supplier.name}: ${lowStockItems.length} ta kam qoldiq topildi`
+          `⚠️ ${supplier.name}: ${lowStockItems.length} низких остатков найдено`
         );
         await notifySupplierLowStock(supplier._id, lowStockItems);
       }
     }
   } catch (error) {
-    console.error("❌ Kam qoldiq tekshirishda xato:", error);
+    console.error("❌ Низкие остатки проверка ошибка:", error);
   }
 };
 
-// Supplier ga kam qoldiq haqida xabar jo'natish
+// Поставщику низкие остатки уведомление отправка
 const notifySupplierLowStock = async (supplierId, lowStockItems) => {
   try {
     const telegramUser = await TelegramUser.findOne({
@@ -689,17 +689,17 @@ const notifySupplierLowStock = async (supplierId, lowStockItems) => {
 
     message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🤖 _Система управления аптекой_\n`;
-    message += `⚰️ _Критический уровень: < 10 шт_`;
+    message += `⚠️ _Критический уровень: < 10 шт_`;
 
     await bot.sendMessage(telegramUser.chatId, message, {
       parse_mode: "Markdown",
     });
 
     console.log(
-      `✅ Professional low stock notification sent to ${supplier.name}`
+      `✅ Профессиональное уведомление о низких остатках отправлено ${supplier.name}`
     );
   } catch (error) {
-    console.error("❌ Supplier notification xatosi:", error);
+    console.error("❌ Поставщик уведомление ошибка:", error);
   }
 };
 
@@ -779,9 +779,9 @@ bot.on("callback_query", async (callbackQuery) => {
 
     await bot.answerCallbackQuery(callbackQuery.id);
   } catch (error) {
-    console.error("Callback query xatosi:", error);
+    console.error("Callback query ошибка:", error);
     await bot.answerCallbackQuery(callbackQuery.id, {
-      text: "Xatolik yuz berdi",
+      text: "Произошла ошибка",
     });
   }
 });
@@ -868,10 +868,20 @@ bot.on("message", async (msg) => {
         const supplier = await Supplier.findOne({
           username: userState.username,
           password: text,
-          isActive: true,
         });
 
         if (supplier) {
+          // Деактивация проверка
+          if (!supplier.isActive) {
+            userStates.delete(chatId);
+            bot.sendMessage(
+              chatId,
+              "❌ Ваш аккаунт деактивирован. Обратитесь к администратору для активации.",
+              mainMenu
+            );
+            return;
+          }
+
           await TelegramUser.findOneAndUpdate(
             { chatId },
             { chatId, userType: "supplier", userId: supplier._id },
@@ -932,8 +942,21 @@ bot.on("message", async (msg) => {
 
     // Команды поставщика
     if (telegramUser.userType === "supplier") {
+      // Поставщик активности проверка
+      const supplier = await Supplier.findById(telegramUser.userId);
+      if (!supplier || !supplier.isActive) {
+        await TelegramUser.deleteOne({ chatId });
+        userStates.delete(chatId);
+        userPaginationData.delete(chatId);
+        bot.sendMessage(
+          chatId,
+          "❌ Ваш аккаунт был деактивирован. Обратитесь к администратору.",
+          mainMenu
+        );
+        return;
+      }
+
       if (text === "📦 Остатки") {
-        const supplier = await Supplier.findById(telegramUser.userId);
         const pageData = await getBranchGroupedRemainsPage(supplier.name, 1);
 
         if (pageData.totalProducts === 0) {
@@ -961,8 +984,6 @@ bot.on("message", async (msg) => {
       }
 
       if (text === "📈 Статистика") {
-        const supplier = await Supplier.findById(telegramUser.userId);
-
         // Loading message
         const loadingMessage = await bot.sendMessage(
           chatId,
@@ -971,16 +992,16 @@ bot.on("message", async (msg) => {
         );
 
         try {
-          // Calculate comprehensive statistics
+          // Comprehensive statistics рассчет
           const stats = await calculateSupplierStatistics(supplier.name);
 
-          // Create professional message
+          // Professional message создание
           const statisticsMessage = createProfessionalStatisticsMessage(
             supplier,
             stats
           );
 
-          // Delete loading message and send statistics
+          // Loading message удаление и statistics отправка
           await bot.deleteMessage(chatId, loadingMessage.message_id);
           await bot.sendMessage(chatId, statisticsMessage, {
             parse_mode: "Markdown",
@@ -1014,12 +1035,12 @@ bot.on("message", async (msg) => {
       bot.sendMessage(chatId, "❓ Команда не распознана", mainMenu);
     }
   } catch (error) {
-    console.error("❌ Ошибка в боте:", error);
+    console.error("❌ Бот ошибка:", error);
     bot.sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
   }
 });
 
-// Функция отправки уведомлений о новых продажах
+// Новые продажи уведомления функция
 export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
   try {
     const doctor = await Doctor.findOne({ code: doctorCode });
@@ -1064,11 +1085,11 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
       $push: { lastNotifiedSales: saleId },
     });
   } catch (error) {
-    console.error("❌ Ошибка отправки уведомления:", error);
+    console.error("❌ Уведомление отправка ошибка:", error);
   }
 };
 
-// Doctorga admin habar jo'natish
+// Врачу админ сообщение отправка
 export const sendMessageToDoctor = async (chatId, message, doctorName) => {
   try {
     const formattedMessage =
@@ -1084,10 +1105,12 @@ export const sendMessageToDoctor = async (chatId, message, doctorName) => {
       parse_mode: "Markdown",
     });
 
-    console.log(`✅ Professional admin message sent to Dr. ${doctorName}`);
+    console.log(
+      `✅ Профессиональное админ сообщение отправлено Dr. ${doctorName}`
+    );
     return true;
   } catch (error) {
-    console.error(`❌ Admin message error for Dr. ${doctorName}:`, error);
+    console.error(`❌ Админ сообщение ошибка для Dr. ${doctorName}:`, error);
     return false;
   }
 };
