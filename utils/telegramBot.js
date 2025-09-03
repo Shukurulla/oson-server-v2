@@ -257,6 +257,26 @@ const formatGroupedSalesPage = (pageData) => {
   return message;
 };
 
+export const sendMessageToDoctor = async (chatId, message, doctorName) => {
+  try {
+    const formattedMessage =
+      `📢 *Habar administratordan*\n\n` +
+      `👨‍⚕️ Dr. ${doctorName}\n\n` +
+      `💬 ${message}\n\n` +
+      `⏰ ${formatDateTime(new Date())}`;
+
+    await bot.sendMessage(chatId, formattedMessage, {
+      parse_mode: "Markdown",
+    });
+
+    console.log(`✅ Admin message sent to Dr. ${doctorName}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Admin message error for Dr. ${doctorName}:`, error);
+    return false;
+  }
+};
+
 // Branch grouped remains sahifasini formatlash
 const formatBranchGroupedRemainsPage = (pageData) => {
   if (pageData.products.length === 0) {

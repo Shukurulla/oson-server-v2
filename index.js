@@ -4,10 +4,11 @@ import cors from "cors";
 import dotenv from "dotenv";
 
 import authRoutes from "./routes/auth.js";
-import dashboardRoutes from "./routes/dashboard.js"; // Bu qo'shilishi kerak edi
+import dashboardRoutes from "./routes/dashboard.js";
 import doctorsRoutes from "./routes/doctors.js";
 import suppliersRoutes from "./routes/suppliers.js";
 import backgroundRoutes from "./routes/background.js";
+import messageRoutes from "./routes/messages.js";
 
 import "./utils/refreshData.js";
 import "./utils/telegramBot.js";
@@ -45,10 +46,11 @@ mongoose.connection.on("error", (err) => {
 
 // Routes
 app.use("/api/auth", authRoutes);
-app.use("/api/dashboard", dashboardRoutes); // Bu qatorni qo'shish kerak edi!
+app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/doctors", doctorsRoutes);
 app.use("/api/suppliers", suppliersRoutes);
 app.use("/api/background", backgroundRoutes);
+app.use("/api/messages", messageRoutes);
 
 app.get("/", (req, res) => {
   res.json({
@@ -59,6 +61,7 @@ app.get("/", (req, res) => {
       "GET /api/dashboard/stats",
       "GET /api/doctors",
       "GET /api/suppliers",
+      "GET /api/messages",
       "GET /api/background/status",
     ],
   });
@@ -94,4 +97,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Server ${PORT} portda ishlamoqda`);
   console.log(`🔄 Background refresh system faol`);
   console.log(`📊 Dashboard API: http://localhost:${PORT}/api/dashboard/stats`);
+  console.log(`💬 Messages API: http://localhost:${PORT}/api/messages`);
 });
