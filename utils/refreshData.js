@@ -1,37 +1,38 @@
+// utils/refreshData.js - To'liq tozalash va qayta qo'shish versiyasi
 import axios from "axios";
 import Remains from "../models/Remains.js";
 import Sales from "../models/Sales.js";
 import PageState from "../models/PageState.js";
 import { checkLowStockAndNotify } from "./telegramBot.js";
 import cron from "node-cron";
-import { Worker } from "worker_threads";
 
 let token = null;
-let refreshQueue = [];
-let isProcessingQueue = false;
 let refreshStatus = {
   isRunning: false,
   currentTask: null,
   progress: 0,
   lastUpdate: null,
   errors: [],
+  stats: {
+    remainsUpdated: 0,
+    remainsDeleted: 0,
+    salesUpdated: 0,
+    itemsFetched: 0,
+  },
 };
 
-// Background refresh statusini olish
-const getRefreshStatus = () => refreshStatus;
-
+// Login
 const login = async () => {
   try {
-    console.log("🔐 Background login...");
-    const loginUrl = "http://osonkassa.uz/api/auth/login";
+    console.log("🔐 Login qilinmoqda...");
     const response = await axios.post(
-      loginUrl,
+      "http://osonkassa.uz/api/auth/login",
       {
         userName: "apteka",
         password: "00000",
       },
       {
-        timeout: 15000,
+        timeout: 10000,
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
@@ -41,365 +42,417 @@ const login = async () => {
     );
 
     token = response.data.token;
-    console.log("✅ Background login muvaffaqiyatli");
+    console.log("✅ Login muvaffaqiyatli");
     return token;
   } catch (error) {
-    console.error("❌ Background login xatosi:", error.message);
+    console.error("❌ Login xatosi:", error.message);
     refreshStatus.errors.push(`Login error: ${error.message}`);
     return null;
   }
 };
 
-// Page state ni olish
-const getPageState = async (type) => {
-  let pageState = await PageState.findOne({ type });
-  if (!pageState) {
-    pageState = new PageState({ type });
-    await pageState.save();
-  }
-  return pageState;
-};
-
-// Bugungi sana
-const getTodayString = () => {
-  return new Date().toISOString().split("T")[0];
-};
-
-// Sale items olish (background)
-const fetchSaleItems = async (saleId) => {
+// TO'LIQ TOZALASH VA QAYTA QO'SHISH - Remains sinxronizatsiya
+const syncRemainsComplete = async () => {
   try {
-    const { data } = await axios.post(
-      "http://osonkassa.uz/api/pos/sales/items/get",
-      { saleId: saleId },
+    console.log("🔄 Remains to'liq sinxronizatsiya boshlandi...");
+    const startTime = Date.now();
+
+    // 1. Birinchi so'rovda totalCount ni aniqlash
+    const firstResponse = await axios.post(
+      "http://osonkassa.uz/api/report/inventory/remains",
+      {
+        manufacturerIds: [],
+        onlyActiveItems: true,
+        pageNumber: 1,
+        pageSize: 1,
+        searchText: "",
+        sortOrders: [{ property: "product", direction: "asc" }],
+        source: 0,
+      },
       {
         headers: { authorization: `Bearer ${token}` },
-        timeout: 8000, // Qisqartirdim
+        timeout: 10000,
       }
     );
-    return data?.page?.items || [];
-  } catch (error) {
-    if (error.code !== "ECONNABORTED") {
-      console.error(`❌ Sale items xato ${saleId}:`, error.message);
+
+    const totalCount = firstResponse.data.page.totalCount || 0;
+
+    console.log(`📦 Oson Kassa'da jami ${totalCount} ta remains topildi`);
+
+    // 2. AVVAL BARCHA ESKI MA'LUMOTLARNI O'CHIRISH
+    console.log("🗑️ Eski ma'lumotlarni tozalash...");
+    const deleteResult = await Remains.deleteMany({});
+    console.log(`✅ ${deleteResult.deletedCount} ta eski remains o'chirildi`);
+
+    refreshStatus.stats.remainsDeleted = deleteResult.deletedCount;
+
+    if (totalCount === 0) {
+      console.log("📦 Oson Kassa'da remains topilmadi");
+      return {
+        updated: 0,
+        deleted: deleteResult.deletedCount,
+        total: 0,
+      };
     }
-    return [];
+
+    // 3. Barcha remains'larni olish
+    const pageSize = 1000;
+    const totalPages = Math.ceil(totalCount / pageSize);
+    const allRemains = [];
+    const PARALLEL_PAGES = 3;
+
+    for (let i = 0; i < totalPages; i += PARALLEL_PAGES) {
+      const pagePromises = [];
+
+      for (let j = i; j < Math.min(i + PARALLEL_PAGES, totalPages); j++) {
+        pagePromises.push(
+          axios.post(
+            "http://osonkassa.uz/api/report/inventory/remains",
+            {
+              manufacturerIds: [],
+              onlyActiveItems: true,
+              pageNumber: j + 1,
+              pageSize: pageSize,
+              searchText: "",
+              sortOrders: [{ property: "product", direction: "asc" }],
+              source: 0,
+            },
+            {
+              headers: { authorization: `Bearer ${token}` },
+              timeout: 20000,
+            }
+          )
+        );
+      }
+
+      const responses = await Promise.allSettled(pagePromises);
+
+      for (const response of responses) {
+        if (
+          response.status === "fulfilled" &&
+          response.value.data?.page?.items
+        ) {
+          const items = response.value.data.page.items;
+          allRemains.push(...items);
+        }
+      }
+
+      console.log(
+        `✅ Remains: ${Math.min(
+          i + PARALLEL_PAGES,
+          totalPages
+        )}/${totalPages} sahifa olindi (${allRemains.length}/${totalCount})`
+      );
+    }
+
+    console.log(`📊 Jami ${allRemains.length} ta remains olindi`);
+
+    // 4. ID bo'yicha unikal qilish (ehtiyot uchun)
+    const uniqueRemainsMap = new Map();
+    for (const item of allRemains) {
+      uniqueRemainsMap.set(item.id, item);
+    }
+
+    const uniqueRemains = Array.from(uniqueRemainsMap.values());
+    console.log(`🔍 ${uniqueRemains.length} ta unikal remains aniqlandi`);
+
+    // 5. Yangi ma'lumotlarni qo'shish (BulkWrite)
+    const bulkOps = uniqueRemains.map((item) => ({
+      insertOne: {
+        document: {
+          ...item,
+          lastUpdated: new Date(),
+        },
+      },
+    }));
+
+    // 6. Batch bo'lib saqlash (5000 tadan)
+    const BATCH_SIZE = 5000;
+    let totalSaved = 0;
+
+    for (let i = 0; i < bulkOps.length; i += BATCH_SIZE) {
+      const batch = bulkOps.slice(i, i + BATCH_SIZE);
+
+      try {
+        const result = await Remains.bulkWrite(batch, {
+          ordered: false,
+        });
+
+        totalSaved += result.insertedCount;
+
+        console.log(
+          `💾 Remains: ${Math.min(i + BATCH_SIZE, bulkOps.length)}/${
+            bulkOps.length
+          } saqlandi`
+        );
+      } catch (error) {
+        console.error(`⚠️ Batch saqlashda xato:`, error.message);
+      }
+    }
+
+    // 7. Yakuniy tekshiruv
+    const finalCount = await Remains.countDocuments();
+    const endTime = Date.now();
+    const duration = Math.round((endTime - startTime) / 1000);
+
+    console.log(`\n🎉 Remains sinxronizatsiya tugadi!`);
+    console.log(`   ⏱️ Vaqt: ${duration} sekund`);
+    console.log(`   📦 Oson Kassa: ${totalCount} ta`);
+    console.log(`   🔍 Unikal: ${uniqueRemains.length} ta`);
+    console.log(`   💾 MongoDB'ga saqlandi: ${totalSaved} ta`);
+    console.log(`   ✅ Hozirgi holat: ${finalCount} ta`);
+
+    // Agar farq bo'lsa, ogohlantirish
+    if (finalCount !== uniqueRemains.length) {
+      console.error(
+        `❌ OGOHLANTIRISH: Kutilgan ${uniqueRemains.length}, lekin ${finalCount} ta saqlandi!`
+      );
+    } else {
+      console.log(`   ✅ MA'LUMOTLAR TO'LIQ MOS KELADI! ✅`);
+    }
+
+    refreshStatus.stats.remainsUpdated = totalSaved;
+
+    return {
+      updated: totalSaved,
+      deleted: deleteResult.deletedCount,
+      total: finalCount,
+      expected: uniqueRemains.length,
+      duration: duration,
+    };
+  } catch (error) {
+    console.error("❌ Remains sinxronizatsiyada xato:", error.message);
+    if (error.response?.status === 401) {
+      token = null;
+    }
+    return { updated: 0, deleted: 0 };
   }
 };
 
-// Background task wrapper
-const runBackgroundTask = async (taskName, taskFunction) => {
-  return new Promise((resolve) => {
-    setImmediate(async () => {
-      try {
-        refreshStatus.currentTask = taskName;
-        const result = await taskFunction();
-        resolve(result);
-      } catch (error) {
-        console.error(`❌ Background task xato ${taskName}:`, error.message);
-        refreshStatus.errors.push(`${taskName}: ${error.message}`);
-        resolve(null);
-      }
-    });
-  });
-};
-
-// Remains yangilash (background)
-const updateRemainsBackground = async () => {
+// Sales yangilash (oldingi kod saqlanadi)
+const syncSalesComplete = async () => {
   try {
-    const pageState = await getPageState("remains");
-    let currentPage = pageState.lastPage;
-    let totalUpdated = 0;
-    let processedPages = 0;
-    let maxPagesPerRun = 10; // Bir martada maksimum 10 sahifa
+    console.log("🔄 Sales to'liq sinxronizatsiya boshlandi...");
+    const startTime = Date.now();
+    const today = new Date().toISOString().split("T")[0];
 
-    console.log(`📦 Remains: sahifa ${currentPage} dan boshlash...`);
+    // 1. Birinchi so'rovda totalCount ni olish
+    const firstResponse = await axios.post(
+      "http://osonkassa.uz/api/pos/sales/get",
+      {
+        dateFrom: today,
+        deletedFilter: 1,
+        pageNumber: 1,
+        pageSize: 1,
+        searchText: "",
+        sortOrders: [],
+      },
+      {
+        headers: { authorization: `Bearer ${token}` },
+        timeout: 10000,
+      }
+    );
 
-    while (processedPages < maxPagesPerRun) {
-      // Non-blocking API call
-      const result = await Promise.race([
-        axios.post(
-          "http://osonkassa.uz/api/report/inventory/remains",
-          {
-            manufacturerIds: [],
-            onlyActiveItems: true,
-            pageNumber: currentPage,
-            pageSize: 150, // Kamroq qildim
-            searchText: "",
-            sortOrders: [{ property: "product", direction: "asc" }],
-            source: 0,
-          },
-          {
-            headers: { authorization: `Bearer ${token}` },
-            timeout: 10000,
+    const totalCount = firstResponse.data.page.totalCount || 0;
+
+    if (totalCount === 0) {
+      console.log("📊 Bugun hech qanday savdo yo'q");
+      return { updated: 0, itemsFetched: 0 };
+    }
+
+    console.log(`📊 Bugun jami ${totalCount} ta savdo topildi`);
+
+    // 2. Barcha sales'larni olish
+    const pageSize = 500;
+    const totalPages = Math.ceil(totalCount / pageSize);
+    const allSales = [];
+    const salesIds = new Set();
+
+    // Parallel ravishda barcha sahifalarni olish
+    const PARALLEL_PAGES = 3;
+
+    for (let i = 0; i < totalPages; i += PARALLEL_PAGES) {
+      const pagePromises = [];
+
+      for (let j = i; j < Math.min(i + PARALLEL_PAGES, totalPages); j++) {
+        pagePromises.push(
+          axios.post(
+            "http://osonkassa.uz/api/pos/sales/get",
+            {
+              dateFrom: today,
+              deletedFilter: 1,
+              pageNumber: j + 1,
+              pageSize: pageSize,
+              searchText: "",
+              sortOrders: [],
+            },
+            {
+              headers: { authorization: `Bearer ${token}` },
+              timeout: 15000,
+            }
+          )
+        );
+      }
+
+      const responses = await Promise.allSettled(pagePromises);
+
+      for (const response of responses) {
+        if (
+          response.status === "fulfilled" &&
+          response.value.data?.page?.items
+        ) {
+          const items = response.value.data.page.items;
+          items.forEach((sale) => {
+            allSales.push(sale);
+            salesIds.add(sale.id);
+          });
+        }
+      }
+
+      console.log(
+        `✅ Sales: ${Math.min(
+          i + PARALLEL_PAGES,
+          totalPages
+        )}/${totalPages} sahifa olindi (${allSales.length}/${totalCount})`
+      );
+    }
+
+    // 3. Bazada mavjud sales'larni tekshirish
+    const existingSales = await Sales.find(
+      { id: { $in: Array.from(salesIds) } },
+      { id: 1, hasItems: 1 }
+    );
+
+    const existingSalesMap = new Map(existingSales.map((s) => [s.id, s]));
+
+    // 4. Items kerak bo'lgan sales'larni aniqlash
+    const salesToFetchItems = [];
+
+    for (const sale of allSales) {
+      const existing = existingSalesMap.get(sale.id);
+
+      if (!existing || !existing.hasItems) {
+        salesToFetchItems.push(sale);
+      }
+    }
+
+    console.log(
+      `📋 ${salesToFetchItems.length} ta sale uchun items olish kerak`
+    );
+
+    // 5. Items'larni parallel olish
+    let itemsFetched = 0;
+    const BATCH_SIZE = 10;
+
+    for (let i = 0; i < salesToFetchItems.length; i += BATCH_SIZE) {
+      const batch = salesToFetchItems.slice(i, i + BATCH_SIZE);
+
+      const itemsPromises = batch.map((sale) =>
+        axios
+          .post(
+            "http://osonkassa.uz/api/pos/sales/items/get",
+            { saleId: sale.id },
+            {
+              headers: { authorization: `Bearer ${token}` },
+              timeout: 5000,
+            }
+          )
+          .then((response) => ({
+            sale: sale,
+            items: response.data?.page?.items || [],
+          }))
+          .catch(() => ({
+            sale: sale,
+            items: [],
+          }))
+      );
+
+      const itemsResults = await Promise.allSettled(itemsPromises);
+
+      for (const result of itemsResults) {
+        if (result.status === "fulfilled") {
+          const { sale, items } = result.value;
+
+          // Sale'ni items bilan saqlash
+          await Sales.findOneAndUpdate(
+            { id: sale.id },
+            {
+              $set: {
+                ...sale,
+                items: items,
+                hasItems: items.length > 0,
+                itemsLastUpdated: new Date(),
+                doctorCode: sale.notes || null,
+                date: new Date(sale.date),
+              },
+            },
+            { upsert: true }
+          );
+
+          if (items.length > 0) {
+            itemsFetched++;
           }
-        ),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout")), 12000)
-        ),
-      ]);
+        }
+      }
 
-      if (result.data?.page?.items?.length > 0) {
-        const items = result.data.page.items;
+      console.log(
+        `✅ Items: ${Math.min(i + BATCH_SIZE, salesToFetchItems.length)}/${
+          salesToFetchItems.length
+        } sale uchun olindi`
+      );
+    }
 
-        // Background da batch update
-        const updates = items.map((item) => ({
+    // 6. Qolgan sales'larni yangilash (items'siz)
+    const bulkOps = [];
+
+    for (const sale of allSales) {
+      if (!salesToFetchItems.find((s) => s.id === sale.id)) {
+        bulkOps.push({
           updateOne: {
-            filter: { id: item.id },
+            filter: { id: sale.id },
             update: {
               $set: {
-                ...item,
-                dataHash: Remains.generateHash(item),
-                lastUpdated: new Date(),
+                ...sale,
+                date: new Date(sale.date),
+                doctorCode: sale.notes || null,
               },
             },
             upsert: true,
           },
-        }));
-
-        await Remains.bulkWrite(updates, { ordered: false });
-        totalUpdated += items.length;
-
-        // Page state yangilash
-        pageState.lastPage = currentPage;
-        pageState.totalPages = result.data.page.totalPages;
-
-        if (currentPage >= result.data.page.totalPages) {
-          pageState.isComplete = true;
-          pageState.lastPage = 1;
-          console.log("✅ Remains to'liq tugadi, reset qilindi");
-          break;
-        } else {
-          pageState.lastPage = currentPage + 1;
-        }
-
-        pageState.lastUpdateTime = new Date();
-        await pageState.save();
-
-        console.log(
-          `✅ Remains sahifa ${currentPage}: ${items.length} ta yangilandi`
-        );
-      } else {
-        console.log(`📄 Sahifa ${currentPage} bo'sh`);
-        pageState.lastPage = 1;
-        pageState.isComplete = true;
-        await pageState.save();
-        break;
-      }
-
-      currentPage++;
-      processedPages++;
-
-      // CPU ga nafas berish
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-
-    refreshStatus.progress = Math.round(
-      (processedPages / maxPagesPerRun) * 100
-    );
-    console.log(
-      `📦 Remains: ${totalUpdated} yangilandi (${processedPages} sahifa)`
-    );
-
-    return { updated: totalUpdated, pages: processedPages };
-  } catch (error) {
-    console.error("❌ Background remains xatosi:", error.message);
-    if (error.response?.status === 401) {
-      token = null;
-    }
-    return null;
-  }
-};
-
-// Sales yangilash (background)
-const updateSalesBackground = async () => {
-  try {
-    const pageState = await getPageState("sales");
-    const dateToSync = getTodayString();
-
-    if (pageState.currentDate !== dateToSync) {
-      pageState.currentDate = dateToSync;
-      pageState.dailyPageState = {
-        currentPage: 1,
-        totalPages: 1,
-        isComplete: false,
-      };
-      await pageState.save();
-    }
-
-    let currentPage = pageState.dailyPageState.currentPage;
-    let totalUpdated = 0;
-    let processedPages = 0;
-    let maxPagesPerRun = 5; // Bir martada maksimum 5 sahifa (chunki items ham olish kerak)
-
-    console.log(`💰 Sales: ${dateToSync} - sahifa ${currentPage}`);
-
-    while (processedPages < maxPagesPerRun) {
-      // Non-blocking sales API call
-      const result = await Promise.race([
-        axios.post(
-          "http://osonkassa.uz/api/pos/sales/get",
-          {
-            dateFrom: dateToSync,
-            deletedFilter: 1,
-            pageNumber: currentPage,
-            pageSize: 30, // Kamroq qildim
-            searchText: "",
-            sortOrders: [],
-          },
-          {
-            headers: { authorization: `Bearer ${token}` },
-            timeout: 10000,
-          }
-        ),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Sales timeout")), 12000)
-        ),
-      ]);
-
-      if (result.data?.page?.items?.length > 0) {
-        const salesList = result.data.page.items;
-
-        // Background da har bir sale uchun items olish
-        for (const sale of salesList) {
-          try {
-            // Non-blocking items call
-            const items = await Promise.race([
-              fetchSaleItems(sale.id),
-              new Promise((resolve) => setTimeout(() => resolve([]), 5000)),
-            ]);
-
-            const completeStaleData = {
-              ...sale,
-              items: items,
-              hasItems: items.length > 0,
-              itemsLastUpdated: new Date(),
-              doctorCode: sale.notes || null,
-              date: new Date(sale.date),
-            };
-
-            const newHash = Sales.generateHash(completeStaleData);
-            const saleWithHash = { ...completeStaleData, dataHash: newHash };
-
-            // Background da database yangilash
-            await Sales.findOneAndUpdate(
-              { id: sale.id },
-              { $set: saleWithHash },
-              { upsert: true, new: false }
-            );
-
-            totalUpdated++;
-
-            // CPU ga nafas berish
-            await new Promise((resolve) => setImmediate(resolve));
-          } catch (saleError) {
-            // Xatolarni log qilamiz lekin davom etamiz
-            console.log(`⚠️ Sale ${sale.id} skip: ${saleError.message}`);
-          }
-        }
-
-        // Page state yangilash
-        pageState.dailyPageState.currentPage = currentPage;
-        pageState.dailyPageState.totalPages = result.data.page.totalPages;
-
-        if (currentPage >= result.data.page.totalPages) {
-          pageState.dailyPageState.isComplete = true;
-          pageState.lastSyncDate = dateToSync;
-          console.log(`✅ ${dateToSync} tugadi`);
-          break;
-        } else {
-          pageState.dailyPageState.currentPage = currentPage + 1;
-        }
-
-        pageState.lastUpdateTime = new Date();
-        await pageState.save();
-
-        console.log(
-          `✅ Sales sahifa ${currentPage}: ${salesList.length} sales, ${totalUpdated} yangilandi`
-        );
-      } else {
-        console.log(`📄 Sales sahifa ${currentPage} bo'sh`);
-        pageState.dailyPageState.isComplete = true;
-        pageState.lastSyncDate = dateToSync;
-        await pageState.save();
-        break;
-      }
-
-      currentPage++;
-      processedPages++;
-    }
-
-    console.log(
-      `💰 Sales: ${totalUpdated} yangilandi (${processedPages} sahifa)`
-    );
-    return { updated: totalUpdated, pages: processedPages };
-  } catch (error) {
-    console.error("❌ Background sales xatosi:", error.message);
-    if (error.response?.status === 401) {
-      token = null;
-    }
-    return null;
-  }
-};
-
-// Missing items to'ldirish (background)
-const fillMissingItemsBackground = async () => {
-  try {
-    const salesWithoutItems = await Sales.find({
-      $or: [
-        { hasItems: false },
-        { hasItems: { $exists: false } },
-        { items: { $size: 0 } },
-      ],
-    }).limit(10); // Kamroq qildim
-
-    if (salesWithoutItems.length === 0) {
-      return { filled: 0 };
-    }
-
-    let filled = 0;
-    console.log(
-      `🔄 ${salesWithoutItems.length} ta missing item to'ldirilmoqda...`
-    );
-
-    for (const sale of salesWithoutItems) {
-      try {
-        // Background da items olish
-        const items = await Promise.race([
-          fetchSaleItems(sale.id),
-          new Promise((resolve) => setTimeout(() => resolve([]), 3000)),
-        ]);
-
-        await Sales.findOneAndUpdate(
-          { _id: sale._id },
-          {
-            $set: {
-              items: items,
-              hasItems: items.length > 0,
-              itemsLastUpdated: new Date(),
-            },
-          }
-        );
-
-        filled++;
-
-        // CPU ga nafas berish
-        await new Promise((resolve) => setImmediate(resolve));
-      } catch (error) {
-        console.log(`⚠️ Missing item skip ${sale.id}: ${error.message}`);
+        });
       }
     }
 
-    console.log(`✅ Missing items: ${filled} ta to'ldirildi`);
-    return { filled };
+    if (bulkOps.length > 0) {
+      await Sales.bulkWrite(bulkOps, { ordered: false });
+    }
+
+    const endTime = Date.now();
+    const duration = Math.round((endTime - startTime) / 1000);
+
+    console.log(`🎉 Sales sinxronizatsiya tugadi!`);
+    console.log(`   ⏱️ Vaqt: ${duration} sekund`);
+    console.log(`   📊 Jami: ${allSales.length} sales`);
+    console.log(`   ✅ Items olindi: ${itemsFetched}`);
+
+    refreshStatus.stats.salesUpdated = allSales.length;
+    refreshStatus.stats.itemsFetched = itemsFetched;
+
+    return {
+      updated: allSales.length,
+      itemsFetched: itemsFetched,
+      duration: duration,
+    };
   } catch (error) {
-    console.error("❌ Background missing items xato:", error.message);
-    return null;
+    console.error("❌ Sales sinxronizatsiyada xato:", error.message);
+    return { updated: 0, itemsFetched: 0 };
   }
 };
 
-// BACKGROUND YANGILANISH - Asosiy funksiya
-const updateAllDataBackground = async () => {
+// ASOSIY YANGILANISH FUNKSIYASI
+const updateAllDataComplete = async () => {
   if (refreshStatus.isRunning) {
-    console.log("⏳ Background refresh allaqachon ishlamoqda...");
+    console.log("⏳ Yangilanish allaqachon ishlamoqda...");
     return;
   }
 
@@ -407,13 +460,20 @@ const updateAllDataBackground = async () => {
   refreshStatus.currentTask = "Boshlash";
   refreshStatus.progress = 0;
   refreshStatus.errors = [];
+  refreshStatus.stats = {
+    remainsUpdated: 0,
+    remainsDeleted: 0,
+    salesUpdated: 0,
+    itemsFetched: 0,
+  };
 
-  const startTime = Date.now();
+  const totalStartTime = Date.now();
 
   try {
-    console.log("🔄 Background refresh boshlandi...");
+    console.log("\n🔥 TO'LIQ SINXRONIZATSIYA BOSHLANDI!");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // 1. Login (agar kerak bo'lsa)
+    // 1. Login
     if (!token) {
       refreshStatus.currentTask = "Login";
       await login();
@@ -423,51 +483,70 @@ const updateAllDataBackground = async () => {
     }
     refreshStatus.progress = 10;
 
-    // 2. Background tasklar parallel ishlatish
-    refreshStatus.currentTask = "Ma'lumotlarni yangilash";
+    // 2. PARALLEL sinxronizatsiya - Sales va Remains bir vaqtda
+    refreshStatus.currentTask = "To'liq sinxronizatsiya";
+    console.log("\n📊 Sales va Remains parallel sinxronlanmoqda...\n");
 
-    const tasks = [
-      runBackgroundTask("Remains", updateRemainsBackground),
-      runBackgroundTask("Sales", updateSalesBackground),
-      runBackgroundTask("Missing Items", fillMissingItemsBackground),
-    ];
+    const [salesResult, remainsResult] = await Promise.allSettled([
+      syncSalesComplete(),
+      syncRemainsComplete(),
+    ]);
 
-    // Parallel ishlatish lekin CPU ga ko'p yuklamaslik uchun
-    const results = await Promise.allSettled(tasks);
+    refreshStatus.progress = 90;
 
-    refreshStatus.progress = 80;
+    // 3. Natijalar
+    const totalEndTime = Date.now();
+    const totalDuration = Math.round((totalEndTime - totalStartTime) / 1000);
 
-    // 3. Low stock check (har 4 marta)
-    const now = new Date();
-    const shouldCheckLowStock = now.getMinutes() % 60 === 0; // Har soat
+    console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("🎉 SINXRONIZATSIYA MUVAFFAQIYATLI TUGADI!");
+    console.log(`⏱️  Umumiy vaqt: ${totalDuration} sekund`);
 
-    if (shouldCheckLowStock) {
-      refreshStatus.currentTask = "Kam qoldiqlar tekshiruvi";
-      await runBackgroundTask("Low Stock Check", checkLowStockAndNotify);
+    if (salesResult.status === "fulfilled") {
+      console.log(
+        `📊 Sales: ${salesResult.value.updated} ta (${salesResult.value.itemsFetched} items)`
+      );
     }
 
-    refreshStatus.progress = 100;
-    refreshStatus.currentTask = "Tugaldi";
+    if (remainsResult.status === "fulfilled") {
+      console.log(`📦 Remains o'chirildi: ${remainsResult.value.deleted} ta`);
+      console.log(`📦 Remains qo'shildi: ${remainsResult.value.updated} ta`);
+      console.log(`📦 MongoDB'da hozir: ${remainsResult.value.total} ta`);
 
-    const endTime = Date.now();
-    const duration = Math.round((endTime - startTime) / 1000);
-
-    console.log(`🎉 Background refresh tugadi! Vaqt: ${duration}s`);
-
-    // Natijalarni log qilish
-    results.forEach((result, index) => {
-      const taskNames = ["Remains", "Sales", "Missing Items"];
-      if (result.status === "fulfilled" && result.value) {
-        console.log(`✅ ${taskNames[index]}: muvaffaqiyatli`);
+      // Moslik tekshiruvi
+      if (remainsResult.value.total === remainsResult.value.expected) {
+        console.log(`✅ MA'LUMOTLAR TO'LIQ MOS KELADI!`);
       } else {
-        console.log(`❌ ${taskNames[index]}: xato yuz berdi`);
+        console.error(
+          `⚠️ FARQ BOR: Kutilgan ${remainsResult.value.expected}, Hozir ${remainsResult.value.total}`
+        );
       }
-    });
+    }
+
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     refreshStatus.lastUpdate = new Date();
+    refreshStatus.progress = 100;
+
+    // 4. Low stock tekshiruvi (har soatda)
+    const now = new Date();
+    if (now.getMinutes() === 0) {
+      refreshStatus.currentTask = "Low stock tekshiruvi";
+      await checkLowStockAndNotify();
+    }
+
+    return {
+      success: true,
+      duration: totalDuration,
+      stats: refreshStatus.stats,
+    };
   } catch (error) {
-    console.error("❌ Background refresh umumiy xato:", error.message);
+    console.error("❌ Sinxronizatsiya xatosi:", error.message);
     refreshStatus.errors.push(`General error: ${error.message}`);
+    return {
+      success: false,
+      error: error.message,
+    };
   } finally {
     refreshStatus.isRunning = false;
     refreshStatus.currentTask = null;
@@ -480,134 +559,156 @@ const updateAllDataBackground = async () => {
   }
 };
 
-// Queue processor
-const processQueue = async () => {
-  if (isProcessingQueue || refreshQueue.length === 0) return;
-
-  isProcessingQueue = true;
-
-  while (refreshQueue.length > 0) {
-    const task = refreshQueue.shift();
-
-    try {
-      console.log(`🔄 Queue task: ${task.name}`);
-      await task.function();
-    } catch (error) {
-      console.error(`❌ Queue task xato: ${task.name}`, error.message);
-    }
-
-    // CPU ga nafas berish
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  isProcessingQueue = false;
-};
-
-// Task ni queuega qo'shish
-const addToQueue = (name, taskFunction) => {
-  refreshQueue.push({ name, function: taskFunction });
-  setImmediate(processQueue);
-};
-
-// Manual triggers
-const manualUpdateRemains = () => {
-  addToQueue("Manual Remains", updateRemainsBackground);
-};
-
-const manualUpdateSales = () => {
-  addToQueue("Manual Sales", updateSalesBackground);
-};
-
-const manualFullUpdate = () => {
-  addToQueue("Manual Full Update", updateAllDataBackground);
-};
-
-// Status monitoring
-const getSystemStatus = async () => {
+// Database statistics
+const getDatabaseStats = async () => {
   try {
-    const remainsState = await PageState.findOne({ type: "remains" });
-    const salesState = await PageState.findOne({ type: "sales" });
+    const [totalSales, salesWithItems, totalRemains, todaySales] =
+      await Promise.all([
+        Sales.countDocuments(),
+        Sales.countDocuments({ hasItems: true }),
+        Remains.countDocuments(),
+        Sales.countDocuments({
+          createdAt: {
+            $gte: new Date(new Date().setHours(0, 0, 0, 0)),
+          },
+        }),
+      ]);
 
-    const totalSales = await Sales.countDocuments();
-    const salesWithItems = await Sales.countDocuments({ hasItems: true });
+    // Unique manufacturers
+    const manufacturers = await Remains.distinct("manufacturer");
 
     return {
-      refresh: refreshStatus,
-      queue: {
-        length: refreshQueue.length,
-        isProcessing: isProcessingQueue,
+      sales: {
+        total: totalSales,
+        withItems: salesWithItems,
+        withoutItems: totalSales - salesWithItems,
+        today: todaySales,
       },
-      data: {
-        remains: {
-          currentPage: remainsState?.lastPage || 1,
-          totalPages: remainsState?.totalPages || 0,
-          lastUpdate: remainsState?.lastUpdateTime,
-        },
-        sales: {
-          currentDate: salesState?.currentDate,
-          total: totalSales,
-          withItems: salesWithItems,
-          withoutItems: totalSales - salesWithItems,
-          lastUpdate: salesState?.lastUpdateTime,
-        },
+      remains: {
+        total: totalRemains,
+        manufacturers: manufacturers.length,
       },
     };
   } catch (error) {
-    console.error("Status olishda xato:", error);
+    console.error("Database stats xato:", error);
     return null;
   }
 };
 
-// Tizimni to'xtatish (graceful shutdown)
-const stopRefresh = () => {
-  refreshStatus.isRunning = false;
-  refreshQueue.length = 0;
-  console.log("🛑 Background refresh to'xtatildi");
+// Manual triggers
+const manualFullUpdate = () => {
+  console.log("📌 Manual to'liq yangilanish so'raldi");
+  updateAllDataComplete();
 };
 
-// YAGONA CRON JOB - Har 15 daqiqada, background da
-cron.schedule("*/15 * * * *", () => {
-  console.log("\n🕐 15-daqiqalik background yangilanish queuega qo'shildi...");
-  addToQueue("Scheduled Update", updateAllDataBackground);
+const stopRefresh = () => {
+  refreshStatus.isRunning = false;
+  console.log("🛑 Yangilanish to'xtatildi");
+};
+
+const getRefreshStatus = () => refreshStatus;
+
+const getSystemStatus = async () => {
+  const stats = await getDatabaseStats();
+
+  return {
+    refresh: refreshStatus,
+    data: stats,
+    lastUpdate: refreshStatus.lastUpdate,
+  };
+};
+
+// CRON JOBS - Optimizatsiyalangan
+// Har 10 daqiqada yangilanish
+cron.schedule("*/10 * * * *", () => {
+  console.log("\n⏰ Muntazam yangilanish (har 10 daqiqa)");
+  updateAllDataComplete();
 });
 
-// Status har soatda
-cron.schedule("0 * * * *", async () => {
-  const status = await getSystemStatus();
-  if (status) {
-    console.log("\n📊 BACKGROUND TIZIM HOLATI:");
-    console.log(`   Refresh running: ${status.refresh.isRunning}`);
-    console.log(`   Current task: ${status.refresh.currentTask || "Yo'q"}`);
-    console.log(`   Queue length: ${status.queue.length}`);
-    console.log(
-      `   Sales: ${status.data.sales.total} (${status.data.sales.withItems} items bilan)`
-    );
-    console.log(
-      `   Remains page: ${status.data.remains.currentPage}/${status.data.remains.totalPages}`
-    );
+// Har soat boshida to'liq yangilanish (yangi token bilan)
+cron.schedule("0 * * * *", () => {
+  console.log("\n⏰ Soatlik to'liq yangilanish");
+  token = null; // Yangi token olish
+  updateAllDataComplete();
+});
+
+// Har kuni ertalab 6:00 da to'liq tozalash va yangilash
+cron.schedule("0 6 * * *", async () => {
+  console.log("\n🧹 Kunlik to'liq tozalash va yangilash...");
+
+  try {
+    // 30 kundan eski sales'larni o'chirish
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const result = await Sales.deleteMany({
+      createdAt: { $lt: thirtyDaysAgo },
+    });
+
+    console.log(`✅ ${result.deletedCount} ta eski sales o'chirildi`);
+
+    // To'liq yangilash
+    token = null;
+    await updateAllDataComplete();
+  } catch (error) {
+    console.error("❌ Kunlik tozalashda xato:", error.message);
   }
 });
 
+// Real-time monitoring
+setInterval(async () => {
+  if (!refreshStatus.isRunning) {
+    const stats = await getDatabaseStats();
+    if (stats) {
+      const time = new Date().toLocaleTimeString("uz-UZ");
+      console.log(`\n📊 [${time}] TIZIM MONITORINGI:`);
+      console.log(
+        `   💊 Remains: ${stats.remains.total} ta (${stats.remains.manufacturers} ishlab chiqaruvchi)`
+      );
+      console.log(
+        `   💰 Sales: ${stats.sales.total} ta (${stats.sales.withItems} items bilan)`
+      );
+      console.log(`   📅 Bugun: ${stats.sales.today} ta savdo`);
+
+      // Xatolik bo'lsa ogohlantirish
+      if (refreshStatus.errors.length > 0) {
+        console.log(`   ⚠️ Xatolar: ${refreshStatus.errors.length} ta`);
+      }
+    }
+  }
+}, 300000); // Har 5 daqiqada
+
 // Boshlang'ich ishga tushirish
 setTimeout(() => {
-  console.log("🚀 Background tizim ishga tushmoqda...");
+  console.log("\n🚀 TIZIM ISHGA TUSHMOQDA...");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("📊 Oson Apteka Sync System v3.0");
+  console.log("🔄 5 sekunddan keyin birinchi sinxronizatsiya...\n");
 
-  // CPU intensive bo'lmagan boshlang'ich yangilanish
-  setTimeout(() => {
-    console.log("🔄 Dastlabki background yangilanish...");
-    addToQueue("Initial Update", updateAllDataBackground);
-  }, 10000); // 10 sekund kutish
-}, 5000);
+  setTimeout(async () => {
+    console.log("🔥 Birinchi to'liq sinxronizatsiya boshlandi!");
 
-// Export functions
+    // Database statistikasi
+    const stats = await getDatabaseStats();
+    if (stats) {
+      console.log(`\n📊 Joriy holat:`);
+      console.log(`   Remains: ${stats.remains.total} ta`);
+      console.log(`   Sales: ${stats.sales.total} ta\n`);
+    }
+
+    await updateAllDataComplete();
+  }, 5000);
+}, 3000);
+
+// Export
 export {
-  updateAllDataBackground,
-  manualUpdateRemains,
-  manualUpdateSales,
+  updateAllDataComplete,
+  syncRemainsComplete,
+  syncSalesComplete,
   manualFullUpdate,
-  getSystemStatus,
-  getRefreshStatus,
   stopRefresh,
-  addToQueue,
+  getRefreshStatus,
+  getSystemStatus,
+  getDatabaseStats,
   login,
 };

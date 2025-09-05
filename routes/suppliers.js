@@ -1,3 +1,4 @@
+// routes/suppliers.js - обновленная версия с временной активацией
 import express from "express";
 import Supplier from "../models/Supplier.js";
 import Remains from "../models/Remains.js";
@@ -7,7 +8,15 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   try {
     const suppliers = await Supplier.find().sort({ createdAt: -1 });
-    res.json({ success: true, data: suppliers });
+
+    // Добавляем информацию об активности
+    const suppliersWithStatus = suppliers.map((supplier) => {
+      const supplierObj = supplier.toObject();
+      supplierObj.isCurrentlyActive = supplier.checkActiveStatus();
+      return supplierObj;
+    });
+
+    res.json({ success: true, data: suppliersWithStatus });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -22,11 +31,51 @@ router.get("/available", async (req, res) => {
   }
 });
 
+// ОБНОВЛЕНО: Остатки без группировки по сериям
 router.get("/:name/remains", async (req, res) => {
   try {
-    const remains = await Remains.find({ manufacturer: req.params.name })
-      .sort({ createdAt: -1 })
-      .limit(100);
+    // Группируем остатки без учета серий
+    const remains = await Remains.aggregate([
+      { $match: { manufacturer: req.params.name } },
+      {
+        $group: {
+          _id: {
+            product: "$product",
+            branch: "$branch",
+            unit: "$unit",
+            pieceCount: "$pieceCount",
+          },
+          quantity: { $sum: "$quantity" },
+          manufacturer: { $first: "$manufacturer" },
+          category: { $first: "$category" },
+          location: { $first: "$location" },
+          buyPrice: { $first: "$buyPrice" },
+          salePrice: { $first: "$salePrice" },
+          barcode: { $first: "$barcode" },
+          shelfLife: { $first: "$shelfLife" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          product: "$_id.product",
+          branch: "$_id.branch",
+          unit: "$_id.unit",
+          pieceCount: "$_id.pieceCount",
+          quantity: 1,
+          manufacturer: 1,
+          category: 1,
+          location: 1,
+          buyPrice: 1,
+          salePrice: 1,
+          barcode: 1,
+          shelfLife: 1,
+        },
+      },
+      { $sort: { quantity: 1 } }, // Сортировка по возрастанию (минимальные остатки первыми)
+      { $limit: 100 },
+    ]);
+
     res.json({ success: true, data: remains });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -43,12 +92,10 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Yangi PUT route - supplier ni update qilish uchun
 router.put("/:id", async (req, res) => {
   try {
     const { name, username, password } = req.body;
 
-    // Validation
     if (!name || !username || !password) {
       return res.status(400).json({
         success: false,
@@ -56,7 +103,6 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // Username uniqueness check (boshqa suppliers uchun)
     const existingUsernameSupplier = await Supplier.findOne({
       username,
       _id: { $ne: req.params.id },
@@ -95,7 +141,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// Deactivate supplier
+// Деактивация поставщика
 router.put("/:id/deactivate", async (req, res) => {
   try {
     const supplier = await Supplier.findByIdAndUpdate(
@@ -121,12 +167,33 @@ router.put("/:id/deactivate", async (req, res) => {
   }
 });
 
-// Activate supplier
+// ОБНОВЛЕНО: Активация поставщика с временным периодом
 router.put("/:id/activate", async (req, res) => {
   try {
+    const { months } = req.body;
+    let activeUntil = null;
+
+    if (months && months > 0) {
+      activeUntil = new Date();
+      activeUntil.setMonth(activeUntil.getMonth() + months);
+    }
+
+    const updateData = { isActive: true };
+    if (activeUntil) {
+      updateData.activeUntil = activeUntil;
+      updateData.$push = {
+        activationHistory: {
+          activatedAt: new Date(),
+          activeUntil: activeUntil,
+          months: months,
+          activatedBy: "admin",
+        },
+      };
+    }
+
     const supplier = await Supplier.findByIdAndUpdate(
       req.params.id,
-      { isActive: true },
+      updateData,
       { new: true }
     );
 
@@ -140,7 +207,9 @@ router.put("/:id/activate", async (req, res) => {
     res.json({
       success: true,
       data: supplier,
-      message: "Поставщик активирован",
+      message: months
+        ? `Поставщик активирован на ${months} месяцев`
+        : "Поставщик активирован",
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

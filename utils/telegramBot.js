@@ -1,4 +1,4 @@
-// utils/telegramBot.js - enhanced version with full Russian language
+// utils/telegramBot.js - обновленная версия с изменениями клиента
 
 import TelegramBot from "node-telegram-bot-api";
 import Doctor from "../models/Doctor.js";
@@ -110,17 +110,31 @@ const formatPercentage = (value, total) => {
   return `${Math.round((value / total) * 100)}%`;
 };
 
-// Профессиональная статистика сообщение создание
+// ОБНОВЛЕНО: Расчет количества упаковок
+const calculatePackages = (quantity, unit, pieceCount) => {
+  // Если есть pieceCount, используем его для расчета упаковок
+  if (pieceCount && pieceCount > 1) {
+    const packages = Math.floor(quantity / pieceCount);
+    const remainder = quantity % pieceCount;
+    if (packages > 0) {
+      if (remainder > 0) {
+        return `${packages} упак. + ${remainder} шт`;
+      }
+      return `${packages} упак.`;
+    }
+  }
+  return `${quantity} шт`;
+};
+
+// ОБНОВЛЕНО: Профессиональная статистика сообщение создание (без серий, с сортировкой по минимальным остаткам)
 const createProfessionalStatisticsMessage = (supplier, stats) => {
   const {
     totalProducts,
     totalQuantity,
     lowStock,
     criticalStock,
-    topProducts,
+    bottomProducts, // Изменено с topProducts на bottomProducts
     branchesCount,
-    totalValue,
-    averageQuantityPerProduct,
     stockHealth,
   } = stats;
 
@@ -137,13 +151,7 @@ const createProfessionalStatisticsMessage = (supplier, stats) => {
 
   message += `📦 *Товарная линейка:* ${formatNumber(totalProducts)} позиций\n`;
   message += `📊 *Общий объём:* ${formatNumber(totalQuantity)} единиц\n`;
-  message += `🏢 *Филиалы:* ${branchesCount} точек\n`;
-  if (totalValue > 0) {
-    message += `💰 *Стоимость остатков:* ${formatNumber(totalValue)} сум\n`;
-  }
-  message += `📋 *Средний остаток:* ${formatNumber(
-    averageQuantityPerProduct
-  )} ед/товар\n\n`;
+  message += `🏢 *Филиалы:* ${branchesCount} точек\n\n`;
 
   // Stock Health Analysis
   message += `🎯 *АНАЛИЗ ОСТАТКОВ*\n\n`;
@@ -153,17 +161,11 @@ const createProfessionalStatisticsMessage = (supplier, stats) => {
   message += `${healthEmoji} *Здоровье склада:* ${stockHealth}%\n`;
 
   if (lowStock > 0) {
-    message += `⚠️ *Низкий остаток:* ${lowStock} позиций (${formatPercentage(
-      lowStock,
-      totalProducts
-    )})\n`;
+    message += `⚠️ *Низкий остаток:* ${lowStock} позиций\n`;
   }
 
   if (criticalStock > 0) {
-    message += `🔥 *Критический уровень:* ${criticalStock} позиций (${formatPercentage(
-      criticalStock,
-      totalProducts
-    )})\n`;
+    message += `🔥 *Критический уровень:* ${criticalStock} позиций\n`;
   }
 
   if (lowStock === 0 && criticalStock === 0) {
@@ -172,38 +174,15 @@ const createProfessionalStatisticsMessage = (supplier, stats) => {
 
   message += `\n`;
 
-  // Distribution Analysis
-  const highStockItems = totalProducts - lowStock - criticalStock;
-  message += `📊 *РАСПРЕДЕЛЕНИЕ ОСТАТКОВ*\n\n`;
-  message += `🟢 Достаточно: ${highStockItems} (${formatPercentage(
-    highStockItems,
-    totalProducts
-  )})\n`;
-  message += `🟡 Мало: ${lowStock} (${formatPercentage(
-    lowStock,
-    totalProducts
-  )})\n`;
-  message += `🔴 Критично: ${criticalStock} (${formatPercentage(
-    criticalStock,
-    totalProducts
-  )})\n\n`;
-
-  // Top Products
-  if (topProducts && topProducts.length > 0) {
-    message += `🏆 *ТОП ПОЗИЦИИ ПО ОСТАТКАМ*\n\n`;
-    topProducts.slice(0, 5).forEach((product, index) => {
-      const medal =
-        index === 0
-          ? "🥇"
-          : index === 1
-          ? "🥈"
-          : index === 2
-          ? "🥉"
-          : `${index + 1}.`;
-      message += `${medal} *${product.name}*\n`;
-      message += `   📊 ${formatNumber(product.quantity)} ${
-        product.unit || "шт"
-      }\n`;
+  // ОБНОВЛЕНО: Минимальные остатки вместо топа
+  if (bottomProducts && bottomProducts.length > 0) {
+    message += `⚠️ *ПОЗИЦИИ С МИНИМАЛЬНЫМИ ОСТАТКАМИ*\n\n`;
+    bottomProducts.slice(0, 5).forEach((product, index) => {
+      const urgencyEmoji = 
+        product.quantity < 5 ? "🔥" : 
+        product.quantity < 20 ? "⚠️" : "📦";
+      message += `${index + 1}. ${urgencyEmoji} *${product.name}*\n`;
+      message += `   📊 ${product.displayQuantity}\n`;
       if (product.branches > 1) {
         message += `   🏢 ${product.branches} филиалов\n`;
       }
@@ -237,10 +216,10 @@ const createProfessionalStatisticsMessage = (supplier, stats) => {
   return message;
 };
 
-// Поставщик статистики рассчет
+// ОБНОВЛЕНО: Поставщик статистики рассчет (с упаковками и сортировкой по минимальным остаткам)
 const calculateSupplierStatistics = async (supplierName) => {
   try {
-    // Основной aggregation
+    // Основной aggregation - группировка без учета серий
     const pipeline = [
       { $match: { manufacturer: supplierName } },
       {
@@ -251,10 +230,11 @@ const calculateSupplierStatistics = async (supplierName) => {
           },
           totalQuantity: { $sum: "$quantity" },
           unit: { $first: "$unit" },
+          pieceCount: { $first: "$pieceCount" },
           buyPrice: { $first: "$buyPrice" },
           salePrice: { $first: "$salePrice" },
           location: { $first: "$location" },
-          series: { $first: "$series" },
+          // Не включаем серию в группировку
         },
       },
     ];
@@ -264,7 +244,6 @@ const calculateSupplierStatistics = async (supplierName) => {
     // Products по группировка
     const productStats = new Map();
     let totalQuantity = 0;
-    let totalValue = 0;
     const branches = new Set();
 
     groupedData.forEach((item) => {
@@ -274,15 +253,12 @@ const calculateSupplierStatistics = async (supplierName) => {
       branches.add(branchName);
       totalQuantity += item.totalQuantity;
 
-      if (item.buyPrice) {
-        totalValue += item.totalQuantity * item.buyPrice;
-      }
-
       if (!productStats.has(productName)) {
         productStats.set(productName, {
           name: productName,
           totalQuantity: 0,
           unit: item.unit,
+          pieceCount: item.pieceCount,
           branches: new Set(),
           locations: new Set(),
         });
@@ -312,13 +288,18 @@ const calculateSupplierStatistics = async (supplierName) => {
       }
     });
 
-    // Top products
-    const topProducts = products
-      .sort((a, b) => b.totalQuantity - a.totalQuantity)
+    // ОБНОВЛЕНО: Bottom products (минимальные остатки) вместо top
+    const bottomProducts = products
+      .sort((a, b) => a.totalQuantity - b.totalQuantity) // Сортировка по возрастанию
       .slice(0, 10)
       .map((product) => ({
         name: product.name,
         quantity: product.totalQuantity,
+        displayQuantity: calculatePackages(
+          product.totalQuantity,
+          product.unit,
+          product.pieceCount
+        ),
         unit: product.unit,
         branches: product.branches.size,
       }));
@@ -332,9 +313,8 @@ const calculateSupplierStatistics = async (supplierName) => {
       totalQuantity,
       lowStock,
       criticalStock,
-      topProducts,
+      bottomProducts, // Изменено с topProducts
       branchesCount: branches.size,
-      totalValue,
       averageQuantityPerProduct: Math.round(totalQuantity / totalProducts),
       stockHealth: isNaN(stockHealth) ? 100 : stockHealth,
     };
@@ -345,16 +325,14 @@ const calculateSupplierStatistics = async (supplierName) => {
       totalQuantity: 0,
       lowStock: 0,
       criticalStock: 0,
-      topProducts: [],
+      bottomProducts: [],
       branchesCount: 0,
-      totalValue: 0,
-      averageQuantityPerProduct: 0,
       stockHealth: 0,
     };
   }
 };
 
-// Sales информацию чек номер по группировка (время с)
+// ОБНОВЛЕНО: Sales информацию чек номер по группировка (без производителя и общего количества товаров)
 const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   try {
     const sales = await Sales.find({
@@ -364,7 +342,6 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
     }).sort({ createdAt: -1 });
 
     const checkGroups = new Map();
-    let totalItems = 0;
 
     for (const sale of sales) {
       if (sale.items && sale.items.length > 0) {
@@ -379,14 +356,11 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
             createdAt: sale.createdAt,
             items: [],
             totalAmount: sale.soldAmount || 0,
-            paymentCash: sale.paymentCash || 0,
-            paymentBankCard: sale.paymentBankCard || 0,
           });
         }
 
         const checkData = checkGroups.get(checkKey);
         checkData.items.push(...sale.items);
-        totalItems += sale.items.length;
       }
     }
 
@@ -405,7 +379,6 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
       currentPage: page,
       totalPages: totalPages,
       totalChecks: totalChecks,
-      totalItems: totalItems,
       hasMore: page < totalPages,
     };
   } catch (error) {
@@ -415,13 +388,12 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
       currentPage: 1,
       totalPages: 1,
       totalChecks: 0,
-      totalItems: 0,
       hasMore: false,
     };
   }
 };
 
-// Филиал по группированные остатки
+// ОБНОВЛЕНО: Филиал по группированные остатки (без серий, с упаковками)
 const getBranchGroupedRemainsPage = async (
   supplierName,
   page = 1,
@@ -438,16 +410,17 @@ const getBranchGroupedRemainsPage = async (
               branch: "$branch",
               quantity: "$quantity",
               unit: "$unit",
+              pieceCount: "$pieceCount",
               location: "$location",
-              series: "$series",
               shelfLife: "$shelfLife",
             },
           },
           totalQuantity: { $sum: "$quantity" },
           unit: { $first: "$unit" },
+          pieceCount: { $first: "$pieceCount" },
         },
       },
-      { $sort: { totalQuantity: -1 } },
+      { $sort: { totalQuantity: 1 } }, // Сортировка по возрастанию (минимальные остатки первыми)
     ]);
 
     const totalProducts = productGroups.length;
@@ -475,7 +448,7 @@ const getBranchGroupedRemainsPage = async (
   }
 };
 
-// Grouped sales страница форматирование (время с)
+// ОБНОВЛЕНО: Grouped sales страница форматирование (без производителя)
 const formatGroupedSalesPage = (pageData) => {
   if (pageData.checks.length === 0) {
     return "📊 *Продажи не найдены*";
@@ -483,8 +456,7 @@ const formatGroupedSalesPage = (pageData) => {
 
   let message = `📊 *ОТЧЁТ ПО ПРОДАЖАМ*\n`;
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  message += `🧾 *Всего чеков:* ${formatNumber(pageData.totalChecks)}\n`;
-  message += `📦 *Всего товаров:* ${formatNumber(pageData.totalItems)}\n\n`;
+  message += `🧾 *Всего чеков:* ${formatNumber(pageData.totalChecks)}\n\n`;
 
   pageData.checks.forEach((checkData, checkIndex) => {
     const globalCheckIndex = (pageData.currentPage - 1) * 3 + checkIndex + 1;
@@ -492,22 +464,11 @@ const formatGroupedSalesPage = (pageData) => {
     message += `📅 ${formatDateTime(checkData.createdAt)}\n`;
     message += `💰 *${formatNumber(checkData.totalAmount)} сум*\n`;
 
-    if (checkData.paymentCash > 0) {
-      message += `💵 Наличные: ${formatNumber(checkData.paymentCash)}\n`;
-    }
-    if (checkData.paymentBankCard > 0) {
-      message += `💳 Карта: ${formatNumber(checkData.paymentBankCard)}\n`;
-    }
-
     message += `\n📦 *Товары в чеке:*\n`;
 
     checkData.items.forEach((item, itemIndex) => {
       message += `   ${itemIndex + 1}. 💊 ${item.product}\n`;
       message += `      📊 ${item.quantity} шт\n`;
-
-      if (item.manufacturer) {
-        message += `      🏭 ${item.manufacturer}\n`;
-      }
     });
     message += "\n";
   });
@@ -519,7 +480,7 @@ const formatGroupedSalesPage = (pageData) => {
   return message;
 };
 
-// Branch grouped remains страница форматирование
+// ОБНОВЛЕНО: Branch grouped remains страница форматирование (без серий, с упаковками)
 const formatBranchGroupedRemainsPage = (pageData) => {
   if (pageData.products.length === 0) {
     return "📦 *Остатки не найдены*";
@@ -531,10 +492,19 @@ const formatBranchGroupedRemainsPage = (pageData) => {
 
   pageData.products.forEach((product, index) => {
     const globalIndex = (pageData.currentPage - 1) * 4 + index + 1;
-    message += `${globalIndex}. 💊 *${product._id}*\n`;
-    message += `📊 *Общий остаток:* ${formatNumber(product.totalQuantity)} ${
-      product.unit || "шт"
-    }\n\n`;
+    const urgencyEmoji = 
+      product.totalQuantity < 5 ? "🔥" : 
+      product.totalQuantity < 20 ? "⚠️" : "📦";
+    
+    message += `${globalIndex}. ${urgencyEmoji} *${product._id}*\n`;
+    
+    // Отображаем количество и упаковки
+    const displayQuantity = calculatePackages(
+      product.totalQuantity,
+      product.unit,
+      product.pieceCount
+    );
+    message += `📊 *Общий остаток:* ${displayQuantity}\n\n`;
 
     // Филиалы по группировка
     const branchGroups = new Map();
@@ -553,25 +523,20 @@ const formatBranchGroupedRemainsPage = (pageData) => {
         (sum, item) => sum + item.quantity,
         0
       );
+      const branchDisplay = calculatePackages(
+        branchTotal,
+        product.unit,
+        product.pieceCount
+      );
       message += `   ${branchIndex}. 🏢 ${branchName}\n`;
-      message += `      📊 ${formatNumber(branchTotal)} ${
-        product.unit || "шт"
-      }\n`;
+      message += `      📊 ${branchDisplay}\n`;
 
-      const uniqueSeries = [
-        ...new Set(
-          branchItems.map((item) => item.series).filter((s) => s && s !== "-")
-        ),
-      ];
       const uniqueLocations = [
         ...new Set(
           branchItems.map((item) => item.location).filter((l) => l && l !== "-")
         ),
       ];
 
-      if (uniqueSeries.length > 0) {
-        message += `      📋 ${uniqueSeries.slice(0, 2).join(", ")}\n`;
-      }
       if (uniqueLocations.length > 0) {
         message += `      📍 ${uniqueLocations.slice(0, 2).join(", ")}\n`;
       }
@@ -617,8 +582,8 @@ const checkLowStockAndNotify = async () => {
             },
             totalQuantity: { $sum: "$quantity" },
             unit: { $first: "$unit" },
+            pieceCount: { $first: "$pieceCount" },
             location: { $first: "$location" },
-            series: { $first: "$series" },
           },
         },
         {
@@ -641,7 +606,7 @@ const checkLowStockAndNotify = async () => {
   }
 };
 
-// Поставщику низкие остатки уведомление отправка
+// ОБНОВЛЕНО: Поставщику низкие остатки уведомление отправка (с упаковками, без серий)
 const notifySupplierLowStock = async (supplierId, lowStockItems) => {
   try {
     const telegramUser = await TelegramUser.findOne({
@@ -666,12 +631,14 @@ const notifySupplierLowStock = async (supplierId, lowStockItems) => {
     itemsToShow.forEach((item, index) => {
       const urgencyEmoji =
         item.totalQuantity < 3 ? "🔥" : item.totalQuantity < 5 ? "⚠️" : "📦";
+      const displayQuantity = calculatePackages(
+        item.totalQuantity,
+        item.unit,
+        item.pieceCount
+      );
       message += `${urgencyEmoji} ${index + 1}. *${item._id.product}*\n`;
       message += `   🏢 ${item._id.branch || "Неизвестный филиал"}\n`;
-      message += `   📊 Остаток: *${item.totalQuantity} шт*\n`;
-      if (item.series && item.series !== "-") {
-        message += `   📋 ${item.series}\n`;
-      }
+      message += `   📊 Остаток: *${displayQuantity}*\n`;
       if (item.location && item.location !== "-") {
         message += `   📍 ${item.location}\n`;
       }
@@ -700,6 +667,61 @@ const notifySupplierLowStock = async (supplierId, lowStockItems) => {
     );
   } catch (error) {
     console.error("❌ Поставщик уведомление ошибка:", error);
+  }
+};
+
+// Функция для удаления чата доктора
+export const clearDoctorChat = async (doctorId) => {
+  try {
+    const telegramUser = await TelegramUser.findOne({
+      userId: doctorId,
+      userType: "doctor"
+    });
+
+    if (telegramUser && telegramUser.chatId) {
+      // Отправляем сообщение о деактивации
+      await bot.sendMessage(
+        telegramUser.chatId,
+        "❌ Ваш аккаунт был деактивирован администратором. Для повторного входа обратитесь к администратору.",
+        mainMenu
+      );
+      
+      // Удаляем связь с телеграмом
+      await TelegramUser.deleteOne({ _id: telegramUser._id });
+      
+      console.log(`✅ Чат доктора ${doctorId} очищен`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("❌ Ошибка очистки чата доктора:", error);
+    return false;
+  }
+};
+
+// Функция для удаления всех чатов докторов
+export const clearAllDoctorChats = async () => {
+  try {
+    const telegramUsers = await TelegramUser.find({ userType: "doctor" });
+    
+    for (const user of telegramUsers) {
+      try {
+        await bot.sendMessage(
+          user.chatId,
+          "❌ Система обновлена. Пожалуйста, войдите заново.",
+          mainMenu
+        );
+      } catch (error) {
+        console.log(`Не удалось отправить сообщение пользователю ${user.chatId}`);
+      }
+    }
+    
+    const result = await TelegramUser.deleteMany({ userType: "doctor" });
+    console.log(`✅ Очищено ${result.deletedCount} чатов докторов`);
+    return result.deletedCount;
+  } catch (error) {
+    console.error("❌ Ошибка очистки всех чатов:", error);
+    return 0;
   }
 };
 
@@ -830,10 +852,31 @@ bot.on("message", async (msg) => {
         const doctor = await Doctor.findOne({
           login: userState.username,
           password: text,
-          isActive: true,
         });
 
         if (doctor) {
+          // Проверка активности и срока активации
+          if (!doctor.isActive) {
+            userStates.delete(chatId);
+            bot.sendMessage(
+              chatId,
+              "❌ Ваш аккаунт деактивирован. Обратитесь к администратору.",
+              mainMenu
+            );
+            return;
+          }
+
+          // Проверка срока активации
+          if (doctor.activeUntil && new Date(doctor.activeUntil) < new Date()) {
+            userStates.delete(chatId);
+            bot.sendMessage(
+              chatId,
+              "❌ Срок активации вашего аккаунта истек. Обратитесь к администратору для продления.",
+              mainMenu
+            );
+            return;
+          }
+
           await TelegramUser.findOneAndUpdate(
             { chatId },
             { chatId, userType: "doctor", userId: doctor._id },
@@ -871,12 +914,23 @@ bot.on("message", async (msg) => {
         });
 
         if (supplier) {
-          // Деактивация проверка
+          // Проверка активности
           if (!supplier.isActive) {
             userStates.delete(chatId);
             bot.sendMessage(
               chatId,
               "❌ Ваш аккаунт деактивирован. Обратитесь к администратору для активации.",
+              mainMenu
+            );
+            return;
+          }
+
+          // Проверка срока активации
+          if (supplier.activeUntil && new Date(supplier.activeUntil) < new Date()) {
+            userStates.delete(chatId);
+            bot.sendMessage(
+              chatId,
+              "❌ Срок активации вашего аккаунта истек. Обратитесь к администратору для продления.",
               mainMenu
             );
             return;
@@ -911,8 +965,22 @@ bot.on("message", async (msg) => {
 
     // Команды врача
     if (telegramUser.userType === "doctor") {
+      const doctor = await Doctor.findById(telegramUser.userId);
+      
+      // Проверка активности
+      if (!doctor || !doctor.isActive || (doctor.activeUntil && new Date(doctor.activeUntil) < new Date())) {
+        await TelegramUser.deleteOne({ chatId });
+        userStates.delete(chatId);
+        userPaginationData.delete(chatId);
+        bot.sendMessage(
+          chatId,
+          "❌ Ваш аккаунт был деактивирован или срок активации истек.",
+          mainMenu
+        );
+        return;
+      }
+
       if (text === "📊 Мои продажи") {
-        const doctor = await Doctor.findById(telegramUser.userId);
         const pageData = await getGroupedSalesPage(doctor.code, 1);
 
         if (pageData.totalChecks === 0) {
@@ -944,13 +1012,13 @@ bot.on("message", async (msg) => {
     if (telegramUser.userType === "supplier") {
       // Поставщик активности проверка
       const supplier = await Supplier.findById(telegramUser.userId);
-      if (!supplier || !supplier.isActive) {
+      if (!supplier || !supplier.isActive || (supplier.activeUntil && new Date(supplier.activeUntil) < new Date())) {
         await TelegramUser.deleteOne({ chatId });
         userStates.delete(chatId);
         userPaginationData.delete(chatId);
         bot.sendMessage(
           chatId,
-          "❌ Ваш аккаунт был деактивирован. Обратитесь к администратору.",
+          "❌ Ваш аккаунт был деактивирован или срок активации истек.",
           mainMenu
         );
         return;
@@ -1044,7 +1112,7 @@ bot.on("message", async (msg) => {
 export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
   try {
     const doctor = await Doctor.findOne({ code: doctorCode });
-    if (!doctor) return;
+    if (!doctor || !doctor.isActive) return;
 
     const telegramUser = await TelegramUser.findOne({
       userId: doctor._id,
@@ -1068,9 +1136,6 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
     sale.items.forEach((item, index) => {
       message += `${index + 1}. 💊 ${item.product}\n`;
       message += `   📊 ${item.quantity} шт\n`;
-      if (item.series && item.series !== "-") {
-        message += `   📋 ${item.series}\n`;
-      }
     });
 
     message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
