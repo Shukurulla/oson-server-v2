@@ -53,6 +53,7 @@ router.get("/:name/remains", async (req, res) => {
           salePrice: { $first: "$salePrice" },
           barcode: { $first: "$barcode" },
           shelfLife: { $first: "$shelfLife" },
+          quantities: { $push: "$quantities" }, // 🔥 shu joy
         },
       },
       {
@@ -70,9 +71,10 @@ router.get("/:name/remains", async (req, res) => {
           salePrice: 1,
           barcode: 1,
           shelfLife: 1,
+          quantities: 1,
         },
       },
-      { $sort: { quantity: 1 } }, // Сортировка по возрастанию (минимальные остатки первыми)
+      { $sort: { quantity: 1 } },
       { $limit: 100 },
     ]);
 
