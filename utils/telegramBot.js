@@ -104,9 +104,9 @@ const formatNumber = (num) => {
   return new Intl.NumberFormat("ru-RU").format(num);
 };
 
-// ODDIY: Quantity ko'rsatish
+// YANGI: Quantity ko'rsatish - vrachlar uchun ham bir xil
 const calculatePackages = (quantities, unit, pieceCount) => {
-  // Agar quantities obyekt bo'lsa
+  // Agar quantities obyekt bo'lsa (supplier format)
   if (quantities && typeof quantities === "object") {
     const units = quantities.units || 0;
     const pieces = quantities.pieces || 0;
@@ -121,8 +121,27 @@ const calculatePackages = (quantities, unit, pieceCount) => {
     return result || "0 шт";
   }
 
-  // Eski format
-  return `${quantities || 0} шт`;
+  // YANGI: Agar quantity raqam bo'lsa (sales items format)
+  if (typeof quantities === "number") {
+    const qty = quantities;
+
+    // Agar 1 dan kichik bo'lsa - штук ko'rsatish (0.2 -> 2 шт)
+    if (qty < 1 && qty > 0) {
+      const pieces = Math.round(qty * 10); // 0.2 * 10 = 2
+      return `${pieces} шт`;
+    }
+    // Agar 1 yoki undan katta bo'lsa - упаковка ko'rsatish
+    else if (qty >= 1) {
+      return `${qty} упак.`;
+    }
+    // Agar 0 bo'lsa
+    else {
+      return "0 шт";
+    }
+  }
+
+  // Default
+  return "0 шт";
 };
 
 // Профессиональная статистика сообщение создание
@@ -309,7 +328,7 @@ const calculateSupplierStatistics = async (supplierName) => {
   }
 };
 
-// Sales информацию чек номер по группировка
+// YANGI: Sales ma'lumotlarini formatlab ko'rsatish - quantities bilan
 const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   try {
     const sales = await Sales.find({
@@ -447,7 +466,7 @@ const getBranchGroupedRemainsPage = async (
   }
 };
 
-// Grouped sales страница форматирование
+// YANGI: Grouped sales страница форматирование - quantities bilan
 const formatGroupedSalesPage = (pageData) => {
   if (pageData.checks.length === 0) {
     return "📊 *Продажи не найдены*";
@@ -467,7 +486,13 @@ const formatGroupedSalesPage = (pageData) => {
 
     checkData.items.forEach((item, itemIndex) => {
       message += `   ${itemIndex + 1}. 💊 ${item.product}\n`;
-      message += `      📊 ${item.quantity} шт\n`;
+      // YANGI: Quantity formatlashtirish
+      const displayQuantity = calculatePackages(
+        item.quantity || item.quantities,
+        item.unit,
+        item.pieceCount
+      );
+      message += `      📊 ${displayQuantity}\n`;
     });
     message += "\n";
   });
@@ -1096,7 +1121,7 @@ bot.on("message", async (msg) => {
   }
 });
 
-// Новые продажи уведомления функция
+// YANGI: Новые продажи уведомления функция - quantities bilan
 export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
   try {
     const doctor = await Doctor.findOne({ code: doctorCode });
@@ -1123,7 +1148,13 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
 
     sale.items.forEach((item, index) => {
       message += `${index + 1}. 💊 ${item.product}\n`;
-      message += `   📊 ${item.quantity} шт\n`;
+      // YANGI: Quantity formatlashtirish
+      const displayQuantity = calculatePackages(
+        item.quantity || item.quantities,
+        item.unit,
+        item.pieceCount
+      );
+      message += `   📊 ${displayQuantity}\n`;
     });
 
     message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
