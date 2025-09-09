@@ -1,4 +1,4 @@
-// utils/telegramBot.js - обновленная версия с простым отображением
+// utils/telegramBot.js - обновленная версия с правильным отображением quantity
 
 import TelegramBot from "node-telegram-bot-api";
 import Doctor from "../models/Doctor.js";
@@ -104,9 +104,9 @@ const formatNumber = (num) => {
   return new Intl.NumberFormat("ru-RU").format(num);
 };
 
-// YANGI: Quantity ko'rsatish - vrachlar uchun ham bir xil
+// ИСПРАВЛЕНО: Правильный расчет quantity для отображения
 const calculatePackages = (quantities, unit, pieceCount) => {
-  // Agar quantities obyekt bo'lsa (supplier format)
+  // Agar quantities obyekt bo'lsa (supplier format - remains)
   if (quantities && typeof quantities === "object") {
     const units = quantities.units || 0;
     const pieces = quantities.pieces || 0;
@@ -121,23 +121,32 @@ const calculatePackages = (quantities, unit, pieceCount) => {
     return result || "0 шт";
   }
 
-  // YANGI: Agar quantity raqam bo'lsa (sales items format)
+  // ИСПРАВЛЕНО: Agar quantity raqam bo'lsa (sales items format)
   if (typeof quantities === "number") {
     const qty = quantities;
+    const pc = pieceCount || 1;
 
-    // Agar 1 dan kichik bo'lsa - штук ko'rsatish (0.2 -> 2 шт)
-    if (qty < 1 && qty > 0) {
-      const pieces = Math.round(qty * 10); // 0.2 * 10 = 2
-      return `${pieces} шт`;
+    // Упаковка сони (butun qism)
+    const packages = Math.floor(qty);
+    
+    // Штук сони (qoldiq qism * pieceCount)
+    const remainder = qty - packages;
+    let pieces = Math.round(remainder * pc);
+    
+    // Agar pieces 0.999999 kabi bo'lsa, uni 1 qilish
+    if (pieces >= pc) {
+      pieces = pieces - pc;
+      packages += 1;
     }
-    // Agar 1 yoki undan katta bo'lsa - упаковка ko'rsatish
-    else if (qty >= 1) {
-      return `${qty} упак.`;
+
+    let result = "";
+    if (packages > 0) result += `${packages} упак.`;
+    if (pieces > 0) {
+      if (result) result += " ";
+      result += `${pieces} шт`;
     }
-    // Agar 0 bo'lsa
-    else {
-      return "0 шт";
-    }
+
+    return result || "0 шт";
   }
 
   // Default
@@ -328,7 +337,7 @@ const calculateSupplierStatistics = async (supplierName) => {
   }
 };
 
-// YANGI: Sales ma'lumotlarini formatlab ko'rsatish - quantities bilan
+// ИСПРАВЛЕНО: Sales ma'lumotlarini formatlab ko'rsatish - to'g'ri quantity hisoblash bilan
 const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   try {
     const sales = await Sales.find({
@@ -466,7 +475,7 @@ const getBranchGroupedRemainsPage = async (
   }
 };
 
-// YANGI: Grouped sales страница форматирование - quantities bilan
+// ИСПРАВЛЕНО: Grouped sales страница форматирование - to'g'ri quantity hisoblash bilan
 const formatGroupedSalesPage = (pageData) => {
   if (pageData.checks.length === 0) {
     return "📊 *Продажи не найдены*";
@@ -486,9 +495,9 @@ const formatGroupedSalesPage = (pageData) => {
 
     checkData.items.forEach((item, itemIndex) => {
       message += `   ${itemIndex + 1}. 💊 ${item.product}\n`;
-      // YANGI: Quantity formatlashtirish
+      // ИСПРАВЛЕНО: To'g'ri quantity formatlashtirish
       const displayQuantity = calculatePackages(
-        item.quantity || item.quantities,
+        item.quantity,
         item.unit,
         item.pieceCount
       );
@@ -1121,7 +1130,7 @@ bot.on("message", async (msg) => {
   }
 });
 
-// YANGI: Новые продажи уведомления функция - quantities bilan
+// ИСПРАВЛЕНО: Новые продажи уведомления функция - to'g'ri quantity hisoblash bilan
 export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
   try {
     const doctor = await Doctor.findOne({ code: doctorCode });
@@ -1148,9 +1157,9 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
 
     sale.items.forEach((item, index) => {
       message += `${index + 1}. 💊 ${item.product}\n`;
-      // YANGI: Quantity formatlashtirish
+      // ИСПРАВЛЕНО: To'g'ri quantity formatlashtirish
       const displayQuantity = calculatePackages(
-        item.quantity || item.quantities,
+        item.quantity,
         item.unit,
         item.pieceCount
       );

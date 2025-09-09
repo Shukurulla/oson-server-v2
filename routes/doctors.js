@@ -219,7 +219,7 @@ router.post("/clear-all-chats", async (req, res) => {
   }
 });
 
-// ASOSIY: Doktor savdolarini olish (filter bilan)
+// ASOSIY: Doktor savdolarini olish (filter bilan) - ИСПРАВЛЕНО: pieceCount qo'shildi
 router.get("/:id/sales", async (req, res) => {
   try {
     const { dateFrom, dateTo, searchProduct, groupByProduct } = req.query;
@@ -334,7 +334,7 @@ router.get("/:id/sales", async (req, res) => {
       });
     }
 
-    // Oddiy ko'rinish (jadval uchun)
+    // Oddiy ko'rinish (jadval uchun) - ИСПРАВЛЕНО: pieceCount qo'shildi
     const salesWithProducts = [];
 
     for (const sale of sales) {
@@ -354,6 +354,7 @@ router.get("/:id/sales", async (req, res) => {
                 product: item.product,
                 manufacturer: item.manufacturer,
                 quantity: item.quantity,
+                pieceCount: item.pieceCount, // ДОБАВЛЕНО: pieceCount
                 soldAmount: item.soldAmount,
                 series: item.series,
                 createdAt: sale.createdAt,
@@ -370,6 +371,7 @@ router.get("/:id/sales", async (req, res) => {
               product: item.product,
               manufacturer: item.manufacturer,
               quantity: item.quantity,
+              pieceCount: item.pieceCount, // ДОБАВЛЕНО: pieceCount
               soldAmount: item.soldAmount,
               series: item.series,
               createdAt: sale.createdAt,
