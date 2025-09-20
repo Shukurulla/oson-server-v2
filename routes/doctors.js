@@ -219,254 +219,175 @@ router.post("/clear-all-chats", async (req, res) => {
   }
 });
 
-// ASOSIY: Doktor savdolarini olish (filter bilan) - ИСПРАВЛЕНО: pieceCount qo'shildi
-// ASOSIY: Doktor savdolarini olish (filter bilan) - TO'G'IRLANGAN VERSIYA
+// DEBUG VERSIYA - Doktor savdolarini olish
 router.get("/:id/sales", async (req, res) => {
+  console.log("🔍 DEBUG: Sales endpoint ishga tushdi");
+  console.log("🔍 DEBUG: Request params:", req.params);
+  console.log("🔍 DEBUG: Request query:", req.query);
+
   try {
-    const { dateFrom, dateTo, searchProduct, groupByProduct } = req.query;
+    const doctorId = req.params.id;
+    console.log("🔍 DEBUG: Doctor ID:", doctorId);
 
-    console.log("Sales request:", {
-      doctorId: req.params.id,
-      dateFrom,
-      dateTo,
-      searchProduct,
-      groupByProduct,
-    });
+    // 1. Doctor ID formatini tekshirish
+    if (!doctorId || doctorId.length !== 24) {
+      console.log("❌ DEBUG: Invalid doctor ID format");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid doctor ID format",
+        receivedId: doctorId,
+      });
+    }
 
-    // 1. Doktor mavjudligini tekshirish
-    const doctor = await Doctor.findById(req.params.id);
+    // 2. Doktorni topish
+    console.log("🔍 DEBUG: Searching for doctor...");
+    const doctor = await Doctor.findById(doctorId);
+    console.log(
+      "🔍 DEBUG: Doctor found:",
+      doctor ? `${doctor.name} (${doctor.code})` : "NOT FOUND"
+    );
+
     if (!doctor) {
       return res.status(404).json({
         success: false,
-        message: "Врач не найден",
+        message: "Doctor not found",
+        searchedId: doctorId,
       });
     }
 
-    console.log(`Doctor found: ${doctor.name} (code: ${doctor.code})`);
+    // 3. Asosiy ma'lumotlarni tekshirish
+    console.log("🔍 DEBUG: Doctor details:");
+    console.log("  - Name:", doctor.name);
+    console.log("  - Code:", doctor.code);
+    console.log("  - Active:", doctor.isActive);
 
-    // 2. Asosiy filter yaratish
-    let filter = {
+    // 4. Sales collection'ni tekshirish
+    console.log("🔍 DEBUG: Checking Sales collection...");
+
+    // Avval umumiy sales count
+    const totalSales = await Sales.countDocuments();
+    console.log("🔍 DEBUG: Total sales in database:", totalSales);
+
+    // Doctor code bo'yicha sales
+    const doctorSalesCount = await Sales.countDocuments({
+      doctorCode: doctor.code,
+    });
+    console.log("🔍 DEBUG: Sales for this doctor code:", doctorSalesCount);
+
+    // Items bilan sales
+    const salesWithItems = await Sales.countDocuments({
       doctorCode: doctor.code,
       hasItems: true,
-    };
+    });
+    console.log("🔍 DEBUG: Sales with items for this doctor:", salesWithItems);
 
-    // 3. Sana filterlari - TO'G'IRLANGAN
-    if (dateFrom || dateTo) {
-      filter.createdAt = {};
-
-      if (dateFrom) {
-        try {
-          const fromDate = new Date(dateFrom);
-          if (isNaN(fromDate.getTime())) {
-            return res.status(400).json({
-              success: false,
-              message: "Неверный формат даты 'dateFrom'",
-            });
+    // 5. Bitta namuna sales olish
+    const sampleSale = await Sales.findOne({ doctorCode: doctor.code }).lean();
+    console.log(
+      "🔍 DEBUG: Sample sale structure:",
+      sampleSale
+        ? {
+            id: sampleSale.id,
+            number: sampleSale.number,
+            doctorCode: sampleSale.doctorCode,
+            hasItems: sampleSale.hasItems,
+            itemsCount: sampleSale.items ? sampleSale.items.length : 0,
+            createdAt: sampleSale.createdAt,
           }
-          fromDate.setHours(0, 0, 0, 0);
-          filter.createdAt.$gte = fromDate;
-        } catch (error) {
-          return res.status(400).json({
-            success: false,
-            message: "Ошибка обработки даты 'dateFrom'",
-          });
-        }
-      }
+        : "NO SAMPLE FOUND"
+    );
 
-      if (dateTo) {
-        try {
-          const toDate = new Date(dateTo);
-          if (isNaN(toDate.getTime())) {
-            return res.status(400).json({
-              success: false,
-              message: "Неверный формат даты 'dateTo'",
-            });
-          }
-          toDate.setHours(23, 59, 59, 999);
-          filter.createdAt.$lte = toDate;
-        } catch (error) {
-          return res.status(400).json({
-            success: false,
-            message: "Ошибка обработки даты 'dateTo'",
-          });
-        }
-      }
-    }
-
-    console.log("Filter applied:", JSON.stringify(filter, null, 2));
-
-    // 4. Savdolarni olish - TO'G'IRLANGAN
-    const sales = await Sales.find(filter)
+    // 6. Barcha sales'larni olish (limit bilan)
+    console.log("🔍 DEBUG: Fetching sales...");
+    const sales = await Sales.find({
+      doctorCode: doctor.code,
+      hasItems: true,
+    })
       .sort({ createdAt: -1 })
-      .limit(2000)
-      .lean(); // .lean() performance uchun
+      .limit(10)
+      .lean();
 
-    console.log(`Found ${sales.length} sales for doctor ${doctor.name}`);
+    console.log("🔍 DEBUG: Retrieved sales count:", sales.length);
 
-    // 5. Agar sales topilmasa
-    if (sales.length === 0) {
-      return res.json({
-        success: true,
-        data: [],
-        message: "Продажи не найдены для указанных критериев",
-        metadata: {
-          doctorName: doctor.name,
-          doctorCode: doctor.code,
-          dateRange: {
-            from: dateFrom || "начало",
-            to: dateTo || "сегодня",
-          },
-          searchProduct: searchProduct || null,
-          totalSales: 0,
-        },
-      });
-    }
-
-    // 6. Gruppalash bo'yicha qaror qabul qilish
-    if (groupByProduct === "true") {
-      console.log("Processing grouped by product...");
-
-      const productStats = {};
-      let totalQuantity = 0;
-      let totalAmount = 0;
-      let totalChecks = sales.length;
-
-      for (const sale of sales) {
-        if (sale.items && sale.items.length > 0) {
-          for (const item of sale.items) {
-            // Mahsulot bo'yicha filter
-            if (
-              searchProduct &&
-              !item.product.toLowerCase().includes(searchProduct.toLowerCase())
-            ) {
-              continue;
-            }
-
-            const productKey = item.product;
-            if (!productStats[productKey]) {
-              productStats[productKey] = {
-                product: item.product,
-                manufacturer: item.manufacturer || "Неизвестно",
-                totalQuantity: 0,
-                totalAmount: 0,
-                sales: [],
-              };
-            }
-
-            const quantity = parseFloat(item.quantity) || 0;
-            const amount = parseFloat(item.soldAmount) || 0;
-
-            productStats[productKey].totalQuantity += quantity;
-            productStats[productKey].totalAmount += amount;
-            productStats[productKey].sales.push({
-              saleNumber: sale.number,
-              saleDate: sale.date || sale.createdAt,
-              quantity: quantity,
-              amount: amount,
-            });
-
-            totalQuantity += quantity;
-            totalAmount += amount;
-          }
-        }
-      }
-
-      const groupedData = Object.values(productStats).sort(
-        (a, b) => b.totalQuantity - a.totalQuantity
+    // 7. Har bir sale'ning tuzilishini tekshirish
+    if (sales.length > 0) {
+      console.log("🔍 DEBUG: First sale detailed structure:");
+      const firstSale = sales[0];
+      console.log("  - Sale ID:", firstSale.id);
+      console.log("  - Sale Number:", firstSale.number);
+      console.log("  - Doctor Code:", firstSale.doctorCode);
+      console.log("  - Has Items:", firstSale.hasItems);
+      console.log("  - Items Array:", Array.isArray(firstSale.items));
+      console.log(
+        "  - Items Count:",
+        firstSale.items ? firstSale.items.length : 0
       );
 
-      return res.json({
-        success: true,
-        data: {
-          grouped: true,
-          dateRange: {
-            from: dateFrom || "начало",
-            to: dateTo || "сегодня",
-          },
-          searchProduct: searchProduct || null,
-          doctorInfo: {
-            name: doctor.name,
-            code: doctor.code,
-          },
-          summary: {
-            totalChecks,
-            totalProducts: groupedData.length,
-            totalQuantity: Math.round(totalQuantity * 100) / 100,
-            totalAmount: Math.round(totalAmount),
-          },
-          products: groupedData,
-        },
-      });
+      if (firstSale.items && firstSale.items.length > 0) {
+        console.log("  - First Item:", {
+          id: firstSale.items[0].id,
+          product: firstSale.items[0].product,
+          quantity: firstSale.items[0].quantity,
+          soldAmount: firstSale.items[0].soldAmount,
+        });
+      }
     }
 
-    // 7. Oddiy format (jadval uchun) - TO'G'IRLANGAN
-    console.log("Processing table format...");
-
-    const salesWithProducts = [];
+    // 8. Response yaratish
+    const responseData = [];
 
     for (const sale of sales) {
       if (sale.items && sale.items.length > 0) {
-        const filteredItems = searchProduct
-          ? sale.items.filter(
-              (item) =>
-                item.product &&
-                item.product.toLowerCase().includes(searchProduct.toLowerCase())
-            )
-          : sale.items;
-
-        filteredItems.forEach((item, index) => {
-          salesWithProducts.push({
-            _id: `${sale._id}_${item.id || index}`,
+        sale.items.forEach((item, index) => {
+          responseData.push({
+            _id: `${sale._id}_${index}`,
             saleNumber: sale.number,
             saleDate: sale.date || sale.createdAt,
-            product: item.product || "Неизвестный товар",
-            manufacturer: item.manufacturer || "Неизвестно",
-            quantity: parseFloat(item.quantity) || 0,
-            pieceCount: parseInt(item.pieceCount) || 1,
-            soldAmount: parseFloat(item.soldAmount) || 0,
+            product: item.product || "Unknown",
+            manufacturer: item.manufacturer || "Unknown",
+            quantity: item.quantity || 0,
+            pieceCount: item.pieceCount || 1,
+            soldAmount: item.soldAmount || 0,
             series: item.series || "",
-            shelfLife: item.shelfLife || null,
             createdAt: sale.createdAt,
           });
         });
       }
     }
 
-    console.log(
-      `Returning ${salesWithProducts.length} sales items for table format`
-    );
+    console.log("🔍 DEBUG: Final response data count:", responseData.length);
 
+    // 9. Response
     return res.json({
       success: true,
-      data: salesWithProducts,
+      debug: {
+        doctorFound: !!doctor,
+        doctorCode: doctor.code,
+        totalSalesInDb: totalSales,
+        doctorSalesCount: doctorSalesCount,
+        salesWithItems: salesWithItems,
+        retrievedSales: sales.length,
+        finalItems: responseData.length,
+      },
+      data: responseData,
       metadata: {
-        doctorInfo: {
-          name: doctor.name,
-          code: doctor.code,
-        },
-        dateRange: {
-          from: dateFrom || "начало",
-          to: dateTo || "сегодня",
-        },
-        searchProduct: searchProduct || null,
-        totalSales: sales.length,
-        totalItems: salesWithProducts.length,
-        grouped: false,
+        doctorName: doctor.name,
+        doctorCode: doctor.code,
+        timestamp: new Date(),
       },
     });
   } catch (error) {
-    console.error("Sales fetch error:", error);
+    console.error("❌ DEBUG: Error occurred:", error);
+    console.error("❌ DEBUG: Error stack:", error.stack);
 
-    // Aniq xato ma'lumotini qaytarish
     return res.status(500).json({
       success: false,
-      message: "Ошибка при получении продаж",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: "Internal server error",
+      error: error.message,
       stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 });
-
 // MUHIM: Savdolar statistikasi
 router.get("/:id/sales-stats", async (req, res) => {
   try {
