@@ -128,11 +128,11 @@ const calculatePackages = (quantities, unit, pieceCount) => {
 
     // Упаковка сони (butun qism)
     const packages = Math.floor(qty);
-    
+
     // Штук сони (qoldiq qism * pieceCount)
     const remainder = qty - packages;
     let pieces = Math.round(remainder * pc);
-    
+
     // Agar pieces 0.999999 kabi bo'lsa, uni 1 qilish
     if (pieces >= pc) {
       pieces = pieces - pc;
@@ -338,26 +338,49 @@ const calculateSupplierStatistics = async (supplierName) => {
 };
 
 // ИСПРАВЛЕНО: Sales ma'lumotlarini formatlab ko'rsatish - to'g'ri quantity hisoblash bilan
+// TO'G'IRLANGAN: Sales ma'lumotlarini formatlab ko'rsatish - to'g'ri doctor code qidirish
 const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
   try {
-    const sales = await Sales.find({
-      doctorCode: doctorCode,
+    // Doctor code'ni notes va doctorCode maydonlaridan qidirish
+    const searchFilter = {
+      $or: [
+        { doctorCode: doctorCode },
+        { doctorCode: String(doctorCode) },
+        { doctorCode: Number(doctorCode) },
+        { notes: doctorCode },
+        { notes: String(doctorCode) },
+        { notes: Number(doctorCode) },
+      ],
       hasItems: true,
       itemsCount: { $gt: 0 },
-    }).sort({ createdAt: -1 });
+    };
+
+    console.log(`🔍 Bot: Searching sales for doctor code: ${doctorCode}`);
+    console.log(
+      `🔍 Bot: Search filter:`,
+      JSON.stringify(searchFilter, null, 2)
+    );
+
+    const sales = await Sales.find(searchFilter).sort({ createdAt: -1 });
+
+    console.log(
+      `🔍 Bot: Found ${sales.length} sales for doctor code ${doctorCode}`
+    );
 
     const checkGroups = new Map();
 
     for (const sale of sales) {
       if (sale.items && sale.items.length > 0) {
         const checkKey = `${sale.number}_${
-          sale.date.toISOString().split("T")[0]
+          sale.date
+            ? sale.date.toISOString().split("T")[0]
+            : sale.createdAt.toISOString().split("T")[0]
         }`;
 
         if (!checkGroups.has(checkKey)) {
           checkGroups.set(checkKey, {
             checkNumber: sale.number,
-            checkDate: sale.date,
+            checkDate: sale.date || sale.createdAt,
             createdAt: sale.createdAt,
             items: [],
             totalAmount: sale.soldAmount || 0,
@@ -379,6 +402,10 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
     const endIndex = startIndex + checksPerPage;
     const pageChecks = checksArray.slice(startIndex, endIndex);
 
+    console.log(
+      `🔍 Bot: Returning ${pageChecks.length} checks on page ${page}/${totalPages}`
+    );
+
     return {
       checks: pageChecks,
       currentPage: page,
@@ -387,7 +414,7 @@ const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
       hasMore: page < totalPages,
     };
   } catch (error) {
-    console.error("Grouped sales страница получения ошибка:", error);
+    console.error("❌ Bot: Grouped sales страница получения ошибка:", error);
     return {
       checks: [],
       currentPage: 1,
