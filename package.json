@@ -16,6 +16,7 @@
     "mongoose": "^7.0.0",
     "node-cron": "^3.0.2",
     "node-telegram-bot-api": "^0.63.0",
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "p-limit": "^7.1.1"
   }
 }

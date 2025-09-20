@@ -10,8 +10,7 @@ import suppliersRoutes from "./routes/suppliers.js";
 import backgroundRoutes from "./routes/background.js";
 import messageRoutes from "./routes/messages.js";
 
-import "./utils/refreshData.js";
-import "./utils/telegramBot.js";
+// import { fetchAndSaveSales } from "./utils/fetchSales.js";
 
 dotenv.config();
 
@@ -25,16 +24,21 @@ app.use(express.json());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-mongoose.connect(
-  process.env.MONGODB_URI || "mongodb://localhost:27017/pharmacy",
-  {
+mongoose
+  .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/pharmacy", {
     useNewUrlParser: true,
     useUnifiedTopology: true,
     maxPoolSize: 10,
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
-  }
-);
+  })
+  .then(() => {
+    // (async () => {
+    //   const dateFrom = "2025-09-01";
+    //   const dateTo = "2025-09-20T23:59:59.9999999";
+    //   await fetchAndSaveSales(dateFrom, dateTo);
+    // })();
+  });
 
 mongoose.connection.on("connected", () => {
   console.log("✅ MongoDB ga ulandi");
