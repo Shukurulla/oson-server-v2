@@ -219,7 +219,6 @@ router.post("/clear-all-chats", async (req, res) => {
   }
 });
 
-// DEBUG VERSIYA - Doktor savdolarini olish
 router.get("/:id/sales", async (req, res) => {
   console.log("🔍 DEBUG: Sales endpoint ishga tushdi");
   console.log("🔍 DEBUG: Request params:", req.params);
@@ -268,21 +267,30 @@ router.get("/:id/sales", async (req, res) => {
     const totalSales = await Sales.countDocuments();
     console.log("🔍 DEBUG: Total sales in database:", totalSales);
 
-    // Doctor code bo'yicha sales
-    const doctorSalesCount = await Sales.countDocuments({
-      doctorCode: doctor.code,
-    });
-    console.log("🔍 DEBUG: Sales for this doctor code:", doctorSalesCount);
+    // Doctor code'ni notes va doctorCode maydonlaridan qidirish
+    const searchFilter = {
+      $or: [
+        { doctorCode: doctor.code },
+        { notes: doctor.code },
+        { notes: String(doctor.code) },
+      ],
+    };
+
+    const doctorSalesCount = await Sales.countDocuments(searchFilter);
+    console.log(
+      "🔍 DEBUG: Sales for this doctor code (both fields):",
+      doctorSalesCount
+    );
 
     // Items bilan sales
     const salesWithItems = await Sales.countDocuments({
-      doctorCode: doctor.code,
+      ...searchFilter,
       hasItems: true,
     });
     console.log("🔍 DEBUG: Sales with items for this doctor:", salesWithItems);
 
     // 5. Bitta namuna sales olish
-    const sampleSale = await Sales.findOne({ doctorCode: doctor.code }).lean();
+    const sampleSale = await Sales.findOne(searchFilter).lean();
     console.log(
       "🔍 DEBUG: Sample sale structure:",
       sampleSale
@@ -290,6 +298,7 @@ router.get("/:id/sales", async (req, res) => {
             id: sampleSale.id,
             number: sampleSale.number,
             doctorCode: sampleSale.doctorCode,
+            notes: sampleSale.notes,
             hasItems: sampleSale.hasItems,
             itemsCount: sampleSale.items ? sampleSale.items.length : 0,
             createdAt: sampleSale.createdAt,
@@ -300,7 +309,7 @@ router.get("/:id/sales", async (req, res) => {
     // 6. Barcha sales'larni olish (limit bilan)
     console.log("🔍 DEBUG: Fetching sales...");
     const sales = await Sales.find({
-      doctorCode: doctor.code,
+      ...searchFilter,
       hasItems: true,
     })
       .sort({ createdAt: -1 })
@@ -363,6 +372,7 @@ router.get("/:id/sales", async (req, res) => {
       debug: {
         doctorFound: !!doctor,
         doctorCode: doctor.code,
+        searchFilter: searchFilter,
         totalSalesInDb: totalSales,
         doctorSalesCount: doctorSalesCount,
         salesWithItems: salesWithItems,
