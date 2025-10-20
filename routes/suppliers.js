@@ -2,6 +2,7 @@
 import express from "express";
 import Supplier from "../models/Supplier.js";
 import Remains from "../models/Remains.js";
+import { getRemainsBySupplier, getSuppliers } from "../utils/refreshData.js";
 
 const router = express.Router();
 
@@ -9,10 +10,16 @@ router.get("/", async (req, res) => {
   try {
     const suppliers = await Supplier.find().sort({ createdAt: -1 });
 
-    // Добавляем информацию об активности
+    // Aktivlik statusini qo'shish
     const suppliersWithStatus = suppliers.map((supplier) => {
       const supplierObj = supplier.toObject();
-      supplierObj.isCurrentlyActive = supplier.checkActiveStatus();
+      // checkActiveStatus metodi bo'lmasa, oddiy tekshirish
+      if (supplier.activeUntil) {
+        supplierObj.isCurrentlyActive =
+          supplier.isActive && new Date(supplier.activeUntil) > new Date();
+      } else {
+        supplierObj.isCurrentlyActive = supplier.isActive;
+      }
       return supplierObj;
     });
 
@@ -24,8 +31,8 @@ router.get("/", async (req, res) => {
 
 router.get("/available", async (req, res) => {
   try {
-    const availableSuppliers = await Remains.distinct("manufacturer");
-    res.json({ success: true, data: availableSuppliers });
+    const availableSuppliers = await getSuppliers();
+    res.json({ success: true, data: availableSuppliers.map((s) => s.name) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -35,50 +42,30 @@ router.get("/available", async (req, res) => {
 router.get("/:name/remains", async (req, res) => {
   try {
     // Группируем остатки без учета серий
-    const remains = await Remains.aggregate([
-      { $match: { manufacturer: req.params.name } },
-      {
-        $group: {
-          _id: {
-            product: "$product",
-            branch: "$branch",
-            unit: "$unit",
-            pieceCount: "$pieceCount",
-          },
-          quantity: { $sum: "$quantity" },
-          manufacturer: { $first: "$manufacturer" },
-          category: { $first: "$category" },
-          location: { $first: "$location" },
-          buyPrice: { $first: "$buyPrice" },
-          salePrice: { $first: "$salePrice" },
-          barcode: { $first: "$barcode" },
-          shelfLife: { $first: "$shelfLife" },
-          quantities: { $push: "$quantities" }, // 🔥 shu joy
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          product: "$_id.product",
-          branch: "$_id.branch",
-          unit: "$_id.unit",
-          pieceCount: "$_id.pieceCount",
-          quantity: 1,
-          manufacturer: 1,
-          category: 1,
-          location: 1,
-          buyPrice: 1,
-          salePrice: 1,
-          barcode: 1,
-          shelfLife: 1,
-          quantities: 1,
-        },
-      },
-      { $sort: { quantity: 1 } },
-      { $limit: 100 },
-    ]);
+    const suppliers = await getSuppliers();
+    const supplier = suppliers.find((s) => s.name === req.params.name);
+    const remains = await getRemainsBySupplier(supplier.id);
 
-    res.json({ success: true, data: remains });
+    const filteredRemains = remains.map((r) => {
+      return {
+        id: r.id,
+        product: r.product,
+        branch: r.branch,
+        unit: r.unit,
+        pieceCount: r.pieceCount,
+        quantity: r.quantity,
+        manufacturer: r.manufacturer,
+        category: r.category,
+        location: r.location,
+        buyPrice: r.buyPrice,
+        salePrice: r.salePrice,
+        barcode: r.barcode,
+        shelfLife: r.shelfLife,
+        quantities: r.quantities,
+      };
+    });
+
+    res.json({ success: true, data: filteredRemains });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

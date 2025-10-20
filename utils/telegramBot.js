@@ -1,15 +1,21 @@
-// utils/telegramBot.js - обновленная версия с правильным отображением quantity
-
+// utils/telegramBot.js - to'liq versiya
 import TelegramBot from "node-telegram-bot-api";
 import Doctor from "../models/Doctor.js";
 import Supplier from "../models/Supplier.js";
 import TelegramUser from "../models/TelegramUser.js";
-import Sales from "../models/Sales.js";
-import Remains from "../models/Remains.js";
+import axios from "axios";
 import { config } from "dotenv";
+import Sales from "../models/Sales.js";
+import {
+  getRemainsBySupplier,
+  getSalesItems,
+  getSuppliers,
+} from "./refreshData.js";
 config();
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+
+const API_BASE = process.env.API_BASE_URL || "http://localhost:5000/api";
 
 const userStates = new Map();
 const userPaginationData = new Map();
@@ -39,51 +45,115 @@ const supplierMenu = {
   },
 };
 
-// Pagination кнопок создание
-const createPaginationButtons = (currentPage, totalPages, prefix) => {
+// Doktor sotuvlari uchun pagination кнопок создание (raqamlar bilan)
+const createSalesPaginationButtons = (
+  currentPage,
+  totalPages,
+  totalSales,
+  sales
+) => {
   const buttons = [];
-  const maxButtons = 5;
 
-  let startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
-  let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+  // Har bir sale uchun raqamli tugmalar (1-10)
+  const saleButtons = [];
+  sales.forEach((sale, index) => {
+    const saleNumber = (currentPage - 1) * 10 + index + 1;
+    saleButtons.push({
+      text: saleNumber.toString(),
+      callback_data: `sale_detail_${index}`,
+    });
+  });
 
-  if (endPage - startPage + 1 < maxButtons) {
-    startPage = Math.max(1, endPage - maxButtons + 1);
+  // 5 tadan bo'lib qatorlarga ajratish
+  for (let i = 0; i < saleButtons.length; i += 5) {
+    buttons.push(saleButtons.slice(i, i + 5));
   }
 
-  const row1 = [];
-  const row2 = [];
-
+  // Navigation buttons
+  const navButtons = [];
   if (currentPage > 1) {
-    row1.push({
+    navButtons.push({
       text: "⬅️ Предыдущая",
-      callback_data: `${prefix}_page_${currentPage - 1}`,
+      callback_data: `sales_page_${currentPage - 1}`,
     });
   }
 
   if (currentPage < totalPages) {
-    row1.push({
+    navButtons.push({
       text: "Следующая ➡️",
-      callback_data: `${prefix}_page_${currentPage + 1}`,
+      callback_data: `sales_page_${currentPage + 1}`,
     });
   }
 
-  for (let i = startPage; i <= endPage; i++) {
-    const text = i === currentPage ? `• ${i} •` : i.toString();
-    row2.push({ text, callback_data: `${prefix}_page_${i}` });
+  if (navButtons.length > 0) {
+    buttons.push(navButtons);
   }
-
-  if (row1.length > 0) buttons.push(row1);
-  if (row2.length > 0) buttons.push(row2);
 
   buttons.push([
     { text: `📄 ${currentPage}/${totalPages}`, callback_data: "info" },
-    { text: "❌ Закрыть", callback_data: `${prefix}_close` },
+    { text: "❌ Закрыть", callback_data: `sales_close` },
   ]);
 
   return {
     reply_markup: {
       inline_keyboard: buttons,
+    },
+  };
+};
+
+// Barcha remains uchun pagination кнопок создание
+const createAllRemainsPaginationButtons = (
+  currentPage,
+  totalPages,
+  totalRemains
+) => {
+  const buttons = [];
+
+  // Navigation buttons
+  const navButtons = [];
+  if (currentPage > 1) {
+    navButtons.push({
+      text: "⬅️ Предыдущая",
+      callback_data: `remains_page_${currentPage - 1}`,
+    });
+  }
+
+  if (currentPage < totalPages) {
+    navButtons.push({
+      text: "Следующая ➡️",
+      callback_data: `remains_page_${currentPage + 1}`,
+    });
+  }
+
+  if (navButtons.length > 0) {
+    buttons.push(navButtons);
+  }
+
+  buttons.push([
+    { text: `📄 ${currentPage}/${totalPages}`, callback_data: "info" },
+    { text: "❌ Закрыть", callback_data: `remains_close` },
+  ]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: buttons,
+    },
+  };
+};
+
+// Sale tafsilotlari uchun кнопок создание
+const createSaleDetailButtons = (saleId, backPage) => {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "⬅️ Назад к списку",
+            callback_data: `sales_page_${backPage}`,
+          },
+          { text: "❌ Закрыть", callback_data: "sales_close" },
+        ],
+      ],
     },
   };
 };
@@ -153,868 +223,602 @@ const calculatePackages = (quantities, unit, pieceCount) => {
   return "0 шт";
 };
 
-// Профессиональная статистика сообщение создание
-const createProfessionalStatisticsMessage = (supplier, stats) => {
-  const {
-    totalProducts,
-    lowStock,
-    criticalStock,
-    bottomProducts,
-    branchesCount,
-    stockHealth,
-  } = stats;
-
-  let message = `📊 *АНАЛИТИЧЕСКИЙ ОТЧЁТ*\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-  // Header with supplier info
-  message += `🏭 *${supplier.name}*\n`;
-  message += `📅 ${formatDateTime(new Date())}\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-  // Key Performance Indicators
-  message += `📈 *КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ*\n\n`;
-  message += `📦 *Товарная линейка:* ${formatNumber(totalProducts)} позиций\n`;
-  message += `🏢 *Филиалы:* ${branchesCount} точек\n\n`;
-
-  // Stock Health Analysis
-  message += `🎯 *АНАЛИЗ ОСТАТКОВ*\n\n`;
-
-  const healthEmoji =
-    stockHealth >= 80 ? "🟢" : stockHealth >= 60 ? "🟡" : "🔴";
-  message += `${healthEmoji} *Здоровье склада:* ${stockHealth}%\n`;
-
-  if (lowStock > 0) {
-    message += `⚠️ *Низкий остаток:* ${lowStock} позиций\n`;
+// YANGI: API orqali doktor sotuvlarini olish (items'siz)
+const fetchDoctorSalesFromAPI = async (doctorCode, page = 1) => {
+  try {
+    let filter = {
+      $or: [
+        { doctorCode: doctorCode },
+        { doctorCode: String(doctorCode) },
+        { notes: doctorCode },
+        { notes: String(doctorCode) },
+      ],
+    };
+    const sales = await Sales.find(filter).sort({ createdAt: -1 });
+    return { data: sales, total: sales.length, pages: 1, currentPage: page };
+  } catch (error) {
+    console.error("API xatosi (doctor sales):", error.message);
+    throw new Error("Sotuvlarni yuklashda xato yuz berdi");
   }
+};
 
-  if (criticalStock > 0) {
-    message += `🔥 *Критический уровень:* ${criticalStock} позиций\n`;
+// YANGI: API orqali supplier remainslarini olish
+const fetchSupplierRemainsFromAPI = async (supplierName, page = 1) => {
+  try {
+    const suppliers = await getSuppliers();
+
+    const supplier = suppliers.find((s) => s.name === supplierName);
+    const response = await getRemainsBySupplier(supplier.id);
+    console.log(response);
+
+    return response;
+  } catch (error) {
+    console.error("API xatosi (supplier remains):", error.message);
+    throw new Error("Ostatchalarni yuklashda xato yuz berdi");
   }
+};
 
-  if (lowStock === 0 && criticalStock === 0) {
-    message += `✅ *Все позиции в норме*\n`;
-  }
+// YANGI: Doktor sotuvlarini sahifalash (har sahifada 10 ta sale)
+const getDoctorSalesPage = async (doctorCode, page, limit = 10) => {
+  try {
+    const response = await fetchDoctorSalesFromAPI(doctorCode, page);
+    const { data: sales, total } = response;
 
-  message += `\n`;
+    // Sahifalash uchun slice qilish
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const pageSales = sales.slice(startIndex, endIndex);
 
-  // Минимальные остатки
-  if (bottomProducts && bottomProducts.length > 0) {
-    message += `⚠️ *ПОЗИЦИИ С МИНИМАЛЬНЫМИ ОСТАТКАМИ*\n\n`;
-    bottomProducts.slice(0, 5).forEach((product, index) => {
-      const urgencyEmoji =
-        product.totalPieces < 5 ? "🔥" : product.totalPieces < 20 ? "⚠️" : "📦";
-      message += `${index + 1}. ${urgencyEmoji} *${product.name}*\n`;
-      message += `   📊 ${product.displayQuantity}\n`;
-      if (product.branches > 1) {
-        message += `   🏢 ${product.branches} филиалов\n`;
-      }
-      message += `\n`;
+    // Har bir sale uchun items sonini hisoblash (faqat statistika uchun)
+    const salesWithItemCount = pageSales.map((sale) => {
+      // Sale ma'lumotlarini to'g'rilash
+      const saleData = {
+        ...sale,
+        id: sale.id || sale._id, // ID ni to'g'rilash
+        itemCount: sale.itemsCount || 0,
+        totalAmount: sale.buyAmount || sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
+        doctorName: sale.createdBy || "Неизвестен", // Doktor nomini createdBy dan olish
+      };
+
+      return saleData;
     });
+
+    const totalPages = Math.ceil(sales.length / limit);
+
+    return {
+      sales: salesWithItemCount,
+      totalSales: total || 0,
+      totalPages: totalPages || 1,
+      currentPage: page,
+      hasMore: endIndex < sales.length,
+    };
+  } catch (error) {
+    throw error;
+  }
+};
+
+// YANGI: Barcha remains'larni sahifalash (filial va mahsulot bo'yicha)
+const getAllRemainsPage = async (supplierName, page, limit = 10) => {
+  try {
+    const response = await fetchSupplierRemainsFromAPI(supplierName, page);
+    const remains = response || [];
+
+    // Sahifalash uchun slice qilish
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const pageRemains = remains.slice(startIndex, endIndex);
+
+    const totalPages = Math.ceil(remains.length / limit);
+
+    return {
+      remains: pageRemains,
+      totalRemains: remains.length || 0,
+      totalPages: totalPages || 1,
+      currentPage: page,
+      hasMore: endIndex < remains.length,
+    };
+  } catch (error) {
+    throw error;
+  }
+};
+
+// YANGI: Doktor sotuvlarini formatlash (har sahifada 10 ta sale)
+const formatDoctorSalesPage = (pageData) => {
+  let message = `📊 *МОИ ПРОДАЖИ*\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  if (pageData.sales.length === 0) {
+    return message + `📈 У вас пока нет продаж.`;
   }
 
-  // Recommendations
-  message += `💡 *РЕКОМЕНДАЦИИ*\n\n`;
+  pageData.sales.forEach((sale, index) => {
+    const saleNumber = (pageData.currentPage - 1) * 10 + index + 1;
+    const dateStr = sale.date
+      ? new Date(sale.date).toLocaleDateString("ru-RU")
+      : "Неизвестно";
 
-  if (criticalStock > 0) {
-    message += `🔥 *Срочно:* Пополните ${criticalStock} позиций\n`;
-  }
+    message += `${saleNumber}. 🧾 *Чек №${sale.number || sale.id}*\n`;
+    message += `   📅 ${dateStr}\n`;
+    message += `   💰 ${formatNumber(sale.totalAmount)} сум\n`;
+    message += `   📦 ${sale.itemCount} товаров\n\n`;
+  });
 
-  if (lowStock > 0) {
-    message += `⚠️ *В ближайшее время:* Закажите ${lowStock} позиций\n`;
-  }
-
-  if (stockHealth >= 80) {
-    message += `✅ *Отлично:* Уровень остатков оптимальный\n`;
-  } else if (stockHealth >= 60) {
-    message += `📋 *Хорошо:* Мониторьте ключевые позиции\n`;
-  } else {
-    message += `📈 *Требует внимания:* Необходимо пополнение\n`;
-  }
-
-  message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `🤖 _Автоматический отчёт системы_\n`;
-  message += `⏰ _Обновлено: ${formatDateTime(new Date())}_`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  message += `📄 Страница ${pageData.currentPage} из ${pageData.totalPages}\n`;
+  message += `💰 Всего чеков: ${pageData.totalSales}\n`;
+  message += `🤖 _Нажмите на номер чека для деталей_\n`;
 
   return message;
 };
 
-// ODDIY: Поставщик статистики рассчет
+// YANGI: Barcha remains'larni formatlash (filial va mahsulot bo'yicha)
+const formatAllRemainsPage = (pageData) => {
+  let message = `📦 *ОСТАТКИ ТОВАРОВ*\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  if (pageData.remains.length === 0) {
+    return message + `📦 Остатки не найдены.`;
+  }
+
+  pageData.remains.forEach((remain, index) => {
+    const remainNumber = (pageData.currentPage - 1) * 10 + index + 1;
+    const quantityDisplay = calculatePackages(
+      remain.quantities,
+      remain.unit,
+      remain.pieceCount
+    );
+
+    message += `${remainNumber}. 💊 *${remain.product}*\n`;
+    message += `   🏢 ${remain.branch}\n`;
+    message += `   📊 ${quantityDisplay}\n\n`;
+  });
+
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  message += `📄 Страница ${pageData.currentPage} из ${pageData.totalPages}\n`;
+  message += `📊 Всего товаров: ${pageData.totalRemains}\n`;
+  message += `🤖 _Показаны все товары с остатками_\n`;
+
+  return message;
+};
+
+// Профессиональная статистика сообщение создание (API dan hisoblash)
+const createProfessionalStatisticsMessage = async (supplier, supplierName) => {
+  try {
+    const remains = (await fetchSupplierRemainsFromAPI(supplierName, 1)) || []; // Faqat statistika uchun 1 sahifa
+
+    // Statistika hisoblash (oddiy misol)
+    const totalProducts = remains.length;
+    const lowStock = remains.filter(
+      (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 5
+    ).length;
+    const criticalStock = remains.filter(
+      (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 1
+    ).length;
+    const branchesCount = [...new Set(remains.map((r) => r.branch))].length;
+    const stockHealth =
+      totalProducts > 0 ? Math.round((1 - lowStock / totalProducts) * 100) : 0;
+
+    const bottomProducts = remains
+      .filter(
+        (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 20
+      )
+      .slice(0, 5)
+      .map((r) => ({
+        name: r.product,
+        displayQuantity: calculatePackages(r.quantities, r.unit, r.pieceCount),
+        branches: [
+          ...new Set(
+            remains
+              .filter((rr) => rr.product === r.product)
+              .map((rr) => rr.branch)
+          ),
+        ].length,
+        totalPieces:
+          (r.quantities?.units || 0) * (r.pieceCount || 1) +
+          (r.quantities?.pieces || 0),
+      }));
+
+    const stats = {
+      totalProducts,
+      lowStock,
+      criticalStock,
+      bottomProducts,
+      branchesCount,
+      stockHealth,
+    };
+
+    let message = `📊 *АНАЛИТИЧЕСКИЙ ОТЧЁТ*\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    // Header with supplier info
+    message += `🏭 *${supplier.name}*\n`;
+    message += `📅 ${formatDateTime(new Date())}\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    // Key Performance Indicators
+    message += `📈 *КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ*\n\n`;
+    message += `📦 *Товарная линейка:* ${formatNumber(
+      totalProducts
+    )} позиций\n`;
+    message += `🏢 *Филиалы:* ${branchesCount} точек\n\n`;
+
+    // Stock Health Analysis
+    message += `🎯 *АНАЛИЗ ОСТАТКОВ*\n\n`;
+
+    const healthEmoji =
+      stockHealth >= 80 ? "🟢" : stockHealth >= 60 ? "🟡" : "🔴";
+    message += `${healthEmoji} *Здоровье склада:* ${stockHealth}%\n`;
+
+    if (lowStock > 0) {
+      message += `⚠️ *Низкий остаток:* ${lowStock} позиций\n`;
+    }
+
+    if (criticalStock > 0) {
+      message += `🔥 *Критический уровень:* ${criticalStock} позиций\n`;
+    }
+
+    if (lowStock === 0 && criticalStock === 0) {
+      message += `✅ *Все позиции в норме*\n`;
+    }
+
+    message += `\n`;
+
+    // Минимальные остатки
+    if (bottomProducts && bottomProducts.length > 0) {
+      message += `⚠️ *ПОЗИЦИИ С МИНИМАЛЬНЫМИ ОСТАТКАМИ*\n\n`;
+      bottomProducts.forEach((product, index) => {
+        const urgencyEmoji =
+          product.totalPieces < 5
+            ? "🔥"
+            : product.totalPieces < 20
+            ? "⚠️"
+            : "📦";
+        message += `${index + 1}. ${urgencyEmoji} *${product.name}*\n`;
+        message += `   📊 ${product.displayQuantity}\n`;
+        if (product.branches > 1) {
+          message += `   🏢 ${product.branches} филиалов\n`;
+        }
+        message += `\n`;
+      });
+    }
+
+    // Recommendations
+    message += `💡 *РЕКОМЕНДАЦИИ*\n\n`;
+
+    if (criticalStock > 0) {
+      message += `🔥 *Срочно:* Пополните ${criticalStock} позиций\n`;
+    }
+
+    if (lowStock > 0) {
+      message += `⚠️ *В ближайшее время:* Закажите ${lowStock} позиций\n`;
+    }
+
+    if (stockHealth >= 80) {
+      message += `✅ *Отлично:* Уровень остатков оптимальный\n`;
+    } else if (stockHealth >= 60) {
+      message += `📋 *Хорошо:* Мониторьте ключевые позиции\n`;
+    } else {
+      message += `📈 *Требует внимания:* Необходимо пополнение\n`;
+    }
+
+    message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `🤖 _Автоматический отчёт системы_\n`;
+    message += `⏰ _Обновлено: ${formatDateTime(new Date())}_`;
+
+    return message;
+  } catch (error) {
+    throw new Error("Statistikani hisoblashda xato yuz berdi");
+  }
+};
+
+// ODDIY: Поставщик статистики рассчет (API dan)
 const calculateSupplierStatistics = async (supplierName) => {
   try {
-    // ODDIY aggregation
-    const allRemains = await Remains.find({ manufacturer: supplierName });
+    const remains = (await fetchSupplierRemainsFromAPI(supplierName, 1)) || []; // Statistika uchun yetarli
 
-    const productStats = new Map();
-    const branches = new Set();
+    // Oddiy hisoblash
+    const totalProducts = remains.length;
+    const lowStock = remains.filter(
+      (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 5
+    ).length;
+    const criticalStock = remains.filter(
+      (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 1
+    ).length;
+    const branchesCount = [
+      ...new Set(remains.map((r) => r.branch || "Неизвестный")),
+    ].length;
+    const stockHealth =
+      totalProducts > 0 ? Math.round((1 - lowStock / totalProducts) * 100) : 0;
 
-    allRemains.forEach((item) => {
-      const productName = item.product;
-      const branchName = item.branch;
-      branches.add(branchName);
-
-      if (!productStats.has(productName)) {
-        productStats.set(productName, {
-          name: productName,
-          quantities: { units: 0, pieces: 0 },
-          unit: item.unit,
-          pieceCount: item.pieceCount,
-          branches: new Set(),
-        });
-      }
-
-      const product = productStats.get(productName);
-      if (item.quantities) {
-        product.quantities.units += item.quantities.units || 0;
-        product.quantities.pieces += item.quantities.pieces || 0;
-      }
-      product.branches.add(branchName);
-    });
-
-    const products = Array.from(productStats.values());
-    const totalProducts = products.length;
-
-    // Critical va low stock hisoblash
-    let lowStock = 0;
-    let criticalStock = 0;
-
-    products.forEach((product) => {
-      const units = product.quantities.units || 0;
-      const pieces = product.quantities.pieces || 0;
-      const pieceCount = product.pieceCount || 1;
-      const totalPieces = units * pieceCount + pieces;
-
-      if (totalPieces < 5) {
-        criticalStock++;
-      } else if (totalPieces < 20) {
-        lowStock++;
-      }
-    });
-
-    // Bottom products
-    const bottomProducts = products
-      .map((product) => {
-        const units = product.quantities.units || 0;
-        const pieces = product.quantities.pieces || 0;
-        const pieceCount = product.pieceCount || 1;
-        const totalPieces = units * pieceCount + pieces;
-
-        return {
-          name: product.name,
-          totalPieces: totalPieces,
-          displayQuantity: calculatePackages(
-            product.quantities,
-            product.unit,
-            product.pieceCount
+    const bottomProducts = remains
+      .filter(
+        (r) => (r.quantities?.units || 0) + (r.quantities?.pieces || 0) < 20
+      )
+      .slice(0, 5)
+      .map((r) => ({
+        name: r.product,
+        displayQuantity: calculatePackages(r.quantities, r.unit, r.pieceCount),
+        branches: [
+          ...new Set(
+            remains
+              .filter((rr) => rr.product === r.product)
+              .map((rr) => rr.branch || "Неизвестный")
           ),
-          branches: product.branches.size,
-        };
-      })
-      .sort((a, b) => a.totalPieces - b.totalPieces)
-      .slice(0, 10);
-
-    const healthyStock = totalProducts - lowStock - criticalStock;
-    const stockHealth = Math.round((healthyStock / totalProducts) * 100);
+        ].length,
+        totalPieces:
+          (r.quantities?.units || 0) * (r.pieceCount || 1) +
+          (r.quantities?.pieces || 0),
+      }));
 
     return {
       totalProducts,
       lowStock,
       criticalStock,
       bottomProducts,
-      branchesCount: branches.size,
-      stockHealth: isNaN(stockHealth) ? 100 : stockHealth,
+      branchesCount,
+      stockHealth,
     };
   } catch (error) {
-    console.error("Statistics calculation error:", error);
-    return {
-      totalProducts: 0,
-      lowStock: 0,
-      criticalStock: 0,
-      bottomProducts: [],
-      branchesCount: 0,
-      stockHealth: 0,
-    };
+    throw error;
   }
 };
 
-// ИСПРАВЛЕНО: Sales ma'lumotlarini formatlab ko'rsatish - to'g'ri quantity hisoblash bilan
-// TO'G'IRLANGAN: Sales ma'lumotlarini formatlab ko'rsatish - to'g'ri doctor code qidirish
-const getGroupedSalesPage = async (doctorCode, page = 1, checksPerPage = 3) => {
+// Загрузка индикатор
+const sendLoadingMessage = async (chatId, text = "Загрузка...") => {
+  return await bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+};
+
+const deleteLoadingMessage = async (chatId, messageId) => {
   try {
-    // Doctor code'ni notes va doctorCode maydonlaridan qidirish
-    const searchFilter = {
-      $or: [
-        { doctorCode: doctorCode },
-        { doctorCode: String(doctorCode) },
-        { doctorCode: Number(doctorCode) },
-        { notes: doctorCode },
-        { notes: String(doctorCode) },
-        { notes: Number(doctorCode) },
-      ],
-      hasItems: true,
-      itemsCount: { $gt: 0 },
-    };
-
-    console.log(`🔍 Bot: Searching sales for doctor code: ${doctorCode}`);
-    console.log(
-      `🔍 Bot: Search filter:`,
-      JSON.stringify(searchFilter, null, 2)
-    );
-
-    const sales = await Sales.find(searchFilter).sort({ createdAt: -1 });
-
-    console.log(
-      `🔍 Bot: Found ${sales.length} sales for doctor code ${doctorCode}`
-    );
-
-    const checkGroups = new Map();
-
-    for (const sale of sales) {
-      if (sale.items && sale.items.length > 0) {
-        const checkKey = `${sale.number}_${
-          sale.date
-            ? sale.date.toISOString().split("T")[0]
-            : sale.createdAt.toISOString().split("T")[0]
-        }`;
-
-        if (!checkGroups.has(checkKey)) {
-          checkGroups.set(checkKey, {
-            checkNumber: sale.number,
-            checkDate: sale.date || sale.createdAt,
-            createdAt: sale.createdAt,
-            items: [],
-            totalAmount: sale.soldAmount || 0,
-          });
-        }
-
-        const checkData = checkGroups.get(checkKey);
-        checkData.items.push(...sale.items);
-      }
-    }
-
-    const checksArray = Array.from(checkGroups.values()).sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-    );
-
-    const totalChecks = checksArray.length;
-    const totalPages = Math.ceil(totalChecks / checksPerPage);
-    const startIndex = (page - 1) * checksPerPage;
-    const endIndex = startIndex + checksPerPage;
-    const pageChecks = checksArray.slice(startIndex, endIndex);
-
-    console.log(
-      `🔍 Bot: Returning ${pageChecks.length} checks on page ${page}/${totalPages}`
-    );
-
-    return {
-      checks: pageChecks,
-      currentPage: page,
-      totalPages: totalPages,
-      totalChecks: totalChecks,
-      hasMore: page < totalPages,
-    };
+    await bot.deleteMessage(chatId, messageId);
   } catch (error) {
-    console.error("❌ Bot: Grouped sales страница получения ошибка:", error);
-    return {
-      checks: [],
-      currentPage: 1,
-      totalPages: 1,
-      totalChecks: 0,
-      hasMore: false,
-    };
+    // Ignore error if message already deleted
   }
 };
 
-// ODDIY: Филиал по группированные остатки
-const getBranchGroupedRemainsPage = async (
-  supplierName,
-  page = 1,
-  productsPerPage = 4
-) => {
-  try {
-    // ODDIY usul
-    const allRemains = await Remains.find({ manufacturer: supplierName });
-
-    const productGroups = new Map();
-
-    allRemains.forEach((item) => {
-      const key = `${item.product}_${item.branch}`;
-
-      if (!productGroups.has(key)) {
-        productGroups.set(key, {
-          _id: item.product,
-          branch: item.branch,
-          totalQuantities: { units: 0, pieces: 0 },
-          unit: item.unit,
-          pieceCount: item.pieceCount,
-          branches: [
-            {
-              branch: item.branch,
-              quantities: { units: 0, pieces: 0 },
-              location: item.location,
-              shelfLife: item.shelfLife,
-            },
-          ],
-        });
-      }
-
-      const group = productGroups.get(key);
-      if (item.quantities) {
-        group.totalQuantities.units += item.quantities.units || 0;
-        group.totalQuantities.pieces += item.quantities.pieces || 0;
-        group.branches[0].quantities.units += item.quantities.units || 0;
-        group.branches[0].quantities.pieces += item.quantities.pieces || 0;
-      }
-    });
-
-    const productsArray = Array.from(productGroups.values()).sort((a, b) => {
-      const aPieces =
-        a.totalQuantities.units * (a.pieceCount || 1) +
-        a.totalQuantities.pieces;
-      const bPieces =
-        b.totalQuantities.units * (b.pieceCount || 1) +
-        b.totalQuantities.pieces;
-      return aPieces - bPieces;
-    });
-
-    const totalProducts = productsArray.length;
-    const totalPages = Math.ceil(totalProducts / productsPerPage);
-    const startIndex = (page - 1) * productsPerPage;
-    const endIndex = startIndex + productsPerPage;
-    const pageProducts = productsArray.slice(startIndex, endIndex);
-
-    return {
-      products: pageProducts,
-      currentPage: page,
-      totalPages: totalPages,
-      totalProducts: totalProducts,
-      hasMore: page < totalPages,
-    };
-  } catch (error) {
-    console.error("Branch grouped remains error:", error);
-    return {
-      products: [],
-      currentPage: 1,
-      totalPages: 1,
-      totalProducts: 0,
-      hasMore: false,
-    };
-  }
-};
-
-// ИСПРАВЛЕНО: Grouped sales страница форматирование - to'g'ri quantity hisoblash bilan
-const formatGroupedSalesPage = (pageData) => {
-  if (pageData.checks.length === 0) {
-    return "📊 *Продажи не найдены*";
-  }
-
-  let message = `📊 *ОТЧЁТ ПО ПРОДАЖАМ*\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  message += `🧾 *Всего чеков:* ${formatNumber(pageData.totalChecks)}\n\n`;
-
-  pageData.checks.forEach((checkData, checkIndex) => {
-    const globalCheckIndex = (pageData.currentPage - 1) * 3 + checkIndex + 1;
-    message += `${globalCheckIndex}. 🧾 *Чек №${checkData.checkNumber}*\n`;
-    message += `📅 ${formatDateTime(checkData.createdAt)}\n`;
-    message += `💰 *${formatNumber(checkData.totalAmount)} сум*\n`;
-
-    message += `\n📦 *Товары в чеке:*\n`;
-
-    checkData.items.forEach((item, itemIndex) => {
-      message += `   ${itemIndex + 1}. 💊 ${item.product}\n`;
-      // ИСПРАВЛЕНО: To'g'ri quantity formatlashtirish
-      const displayQuantity = calculatePackages(
-        item.quantity,
-        item.unit,
-        item.pieceCount
-      );
-      message += `      📊 ${displayQuantity}\n`;
-    });
-    message += "\n";
-  });
-
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `🤖 _Автоматический отчёт системы_\n`;
-  message += `⏰ _${formatDateTime(new Date())}_`;
-
-  return message;
-};
-
-// ODDIY: Branch grouped remains страница форматирование
-const formatBranchGroupedRemainsPage = (pageData) => {
-  if (pageData.products.length === 0) {
-    return "📦 *Остатки не найдены*";
-  }
-
-  let message = `📦 *СКЛАДСКИЕ ОСТАТКИ*\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  message += `📊 *Всего позиций:* ${formatNumber(pageData.totalProducts)}\n\n`;
-
-  pageData.products.forEach((product, index) => {
-    const globalIndex = (pageData.currentPage - 1) * 4 + index + 1;
-
-    // Stock status aniqlash
-    const totalPieces =
-      product.totalQuantities.units * (product.pieceCount || 1) +
-      product.totalQuantities.pieces;
-    const urgencyEmoji =
-      totalPieces < 5 ? "🔥" : totalPieces < 20 ? "⚠️" : "📦";
-
-    message += `${globalIndex}. ${urgencyEmoji} *${product._id}*\n`;
-
-    // Quantity ko'rsatish
-    const displayQuantity = calculatePackages(
-      product.totalQuantities,
-      product.unit,
-      product.pieceCount
-    );
-    message += `📊 *Общий остаток:* ${displayQuantity}\n\n`;
-
-    // Filial ma'lumotlari
-    message += `🏪 *Филиалы:*\n`;
-    product.branches.forEach((branch, branchIndex) => {
-      const branchDisplay = calculatePackages(
-        branch.quantities,
-        product.unit,
-        product.pieceCount
-      );
-
-      message += `   ${branchIndex + 1}. 🏢 ${branch.branch}\n`;
-      message += `      📊 ${branchDisplay}\n`;
-
-      if (
-        branch.location &&
-        branch.location !== "" &&
-        branch.location !== "-"
-      ) {
-        message += `      📍 ${branch.location}\n`;
-      }
-    });
-    message += "\n";
-  });
-
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `🤖 _Автоматический отчёт системы_\n`;
-  message += `⏰ _${formatDateTime(new Date())}_`;
-
-  return message;
-};
-
-// Низкие остатки проверка и уведомление отправка
+// YANGI: Low stock tekshiruvi va bildirishnoma (placeholder)
 const checkLowStockAndNotify = async () => {
+  console.log("Low stock tekshiruvi - placeholder");
+};
+
+// YANGI: Supplier low stock bildirishnoma (placeholder)
+const notifySupplierLowStock = async () => {
+  console.log("Supplier low stock bildirishnoma - placeholder");
+};
+
+// ИСПРАВЛЕНИЕ: Улучшенная обработка состояний
+const setUserState = (chatId, state) => {
+  userStates.set(chatId, { ...state, timestamp: Date.now() });
+};
+
+const getUserState = (chatId) => {
+  const state = userStates.get(chatId);
+  // Очищаем устаревшие состояния (старше 30 минут)
+  if (state && Date.now() - state.timestamp > 30 * 60 * 1000) {
+    userStates.delete(chatId);
+    return null;
+  }
+  return state;
+};
+
+// ИСПРАВЛЕНИЕ: Обработка команды /start
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+
   try {
-    console.log("🔍 Низкие остатки проверяются...");
+    await bot.sendChatAction(chatId, "typing");
 
-    const suppliers = await Supplier.find({ isActive: true });
+    const telegramUser = await TelegramUser.findOne({ chatId });
 
-    for (const supplier of suppliers) {
-      // Supplier bo'yicha barcha remains'larni olish va gruppalashtirish
-      const allRemains = await Remains.find({ manufacturer: supplier.name });
+    if (telegramUser) {
+      // Пользователь уже зарегистрирован
+      if (telegramUser.userType === "doctor") {
+        const doctor = await Doctor.findById(telegramUser.userId);
 
-      const productGroups = new Map();
-
-      allRemains.forEach((item) => {
-        const key = `${item.product}_${item.branch}`;
-
-        if (!productGroups.has(key)) {
-          productGroups.set(key, {
-            product: item.product,
-            branch: item.branch,
-            quantities: { units: 0, pieces: 0 },
-            pieceCount: item.pieceCount,
-            unit: item.unit,
-            location: item.location,
-          });
+        if (
+          !doctor ||
+          !doctor.isActive ||
+          (doctor.activeUntil && new Date(doctor.activeUntil) < new Date())
+        ) {
+          await TelegramUser.deleteOne({ chatId });
+          userStates.delete(chatId);
+          userPaginationData.delete(chatId);
+          await bot.sendMessage(
+            chatId,
+            "❌ Ваш аккаунт был деактивирован или срок активации истек.",
+            mainMenu
+          );
+          return;
         }
 
-        const group = productGroups.get(key);
-        if (item.quantities) {
-          group.quantities.units += item.quantities.units || 0;
-          group.quantities.pieces += item.quantities.pieces || 0;
-        }
-      });
-
-      // Low stock items aniqlash
-      const lowStockItems = Array.from(productGroups.values()).filter(
-        (item) => {
-          const units = item.quantities.units || 0;
-          const pieces = item.quantities.pieces || 0;
-          const pieceCount = item.pieceCount || 1;
-          const totalPieces = units * pieceCount + pieces;
-
-          return totalPieces < 10;
-        }
-      );
-
-      if (lowStockItems.length > 0) {
-        console.log(
-          `⚠️ ${supplier.name}: ${lowStockItems.length} low stock items found`
+        await bot.sendMessage(
+          chatId,
+          `👋 Добро пожаловать обратно, Dr. ${doctor.name}!`,
+          doctorMenu
         );
-        await notifySupplierLowStock(supplier._id, lowStockItems);
+      } else if (telegramUser.userType === "supplier") {
+        const supplier = await Supplier.findById(telegramUser.userId);
+        if (
+          !supplier ||
+          !supplier.isActive ||
+          (supplier.activeUntil && new Date(supplier.activeUntil) < new Date())
+        ) {
+          await TelegramUser.deleteOne({ chatId });
+          userStates.delete(chatId);
+          userPaginationData.delete(chatId);
+          await bot.sendMessage(
+            chatId,
+            "❌ Ваш аккаунт был деактивирован или срок активации истек.",
+            mainMenu
+          );
+          return;
+        }
+
+        await bot.sendMessage(
+          chatId,
+          `👋 Добро пожаловать обратно, ${supplier.name}!`,
+          supplierMenu
+        );
       }
-    }
-  } catch (error) {
-    console.error("❌ Low stock check error:", error);
-  }
-};
-
-// Поставщику низкие остатки уведомление отправка
-const notifySupplierLowStock = async (supplierId, lowStockItems) => {
-  try {
-    const telegramUser = await TelegramUser.findOne({
-      userId: supplierId,
-      userType: "supplier",
-    });
-
-    if (!telegramUser) return;
-
-    const supplier = await Supplier.findById(supplierId);
-    if (!supplier) return;
-
-    let message = `🚨 *КРИТИЧЕСКОЕ УВЕДОМЛЕНИЕ*\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    message += `🏭 *${supplier.name}*\n`;
-    message += `📅 ${formatDateTime(new Date())}\n\n`;
-    message += `⚠️ *Обнаружены критически низкие остатки*\n`;
-    message += `📊 Найдено *${lowStockItems.length} позиций* с остатком менее 10 шт\n\n`;
-
-    const itemsToShow = lowStockItems.slice(0, 8);
-
-    itemsToShow.forEach((item, index) => {
-      const units = item.quantities.units || 0;
-      const pieces = item.quantities.pieces || 0;
-      const pieceCount = item.pieceCount || 1;
-      const totalPieces = units * pieceCount + pieces;
-
-      const urgencyEmoji =
-        totalPieces < 3 ? "🔥" : totalPieces < 5 ? "⚠️" : "📦";
-      const displayQuantity = calculatePackages(
-        item.quantities,
-        item.unit,
-        item.pieceCount
-      );
-
-      message += `${urgencyEmoji} ${index + 1}. *${item.product}*\n`;
-      message += `   🏢 ${item.branch || "Неизвестный филиал"}\n`;
-      message += `   📊 Остаток: *${displayQuantity}*\n`;
-      if (item.location && item.location !== "-") {
-        message += `   📍 ${item.location}\n`;
-      }
-      message += "\n";
-    });
-
-    if (lowStockItems.length > 8) {
-      message += `📋 ... и ещё *${lowStockItems.length - 8} позиций*\n\n`;
-    }
-
-    message += `🎯 *РЕКОМЕНДАЦИИ:*\n`;
-    message += `• Срочно пополните критичные позиции (< 5 шт)\n`;
-    message += `• Запланируйте закупку товаров с низким остатком\n`;
-    message += `• Проверьте прогнозы продаж по данным позициям\n\n`;
-
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🤖 _Система управления аптекой_\n`;
-    message += `⚠️ _Критический уровень: < 10 шт_`;
-
-    await bot.sendMessage(telegramUser.chatId, message, {
-      parse_mode: "Markdown",
-    });
-
-    console.log(`✅ Уведомление о низких остатках отправлено ${supplier.name}`);
-  } catch (error) {
-    console.error("❌ Supplier notification error:", error);
-  }
-};
-
-// Функция для удаления чата доктора
-export const clearDoctorChat = async (doctorId) => {
-  try {
-    const telegramUser = await TelegramUser.findOne({
-      userId: doctorId,
-      userType: "doctor",
-    });
-
-    if (telegramUser && telegramUser.chatId) {
+    } else {
+      // Новый пользователь
+      setUserState(chatId, { step: "select_type" });
       await bot.sendMessage(
-        telegramUser.chatId,
-        "❌ Ваш аккаунт был деактивирован администратором. Для повторного входа обратитесь к администратору.",
+        chatId,
+        "👋 Добро пожаловать в систему управления аптекой!\n\nВыберите тип аккаунта:",
         mainMenu
       );
-
-      await TelegramUser.deleteOne({ _id: telegramUser._id });
-
-      console.log(`✅ Чат доктора ${doctorId} очищен`);
-      return true;
     }
-    return false;
   } catch (error) {
-    console.error("❌ Ошибка очистки чата доктора:", error);
-    return false;
-  }
-};
-
-// Функция для удаления всех чатов докторов
-export const clearAllDoctorChats = async () => {
-  try {
-    const telegramUsers = await TelegramUser.find({ userType: "doctor" });
-
-    for (const user of telegramUsers) {
-      try {
-        await bot.sendMessage(
-          user.chatId,
-          "❌ Система обновлена. Пожалуйста, войдите заново.",
-          mainMenu
-        );
-      } catch (error) {
-        console.log(
-          `Не удалось отправить сообщение пользователю ${user.chatId}`
-        );
-      }
-    }
-
-    const result = await TelegramUser.deleteMany({ userType: "doctor" });
-    console.log(`✅ Очищено ${result.deletedCount} чатов докторов`);
-    return result.deletedCount;
-  } catch (error) {
-    console.error("❌ Ошибка очистки всех чатов:", error);
-    return 0;
-  }
-};
-
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  userStates.delete(chatId);
-  userPaginationData.delete(chatId);
-  bot.sendMessage(chatId, "👋 Добро пожаловать! Выберите тип входа:", mainMenu);
-});
-
-// Callback query handler
-bot.on("callback_query", async (callbackQuery) => {
-  const message = callbackQuery.message;
-  const data = callbackQuery.data;
-  const chatId = message.chat.id;
-
-  try {
-    if (data.startsWith("sales_page_")) {
-      const page = parseInt(data.split("_")[2]);
-      const paginationData = userPaginationData.get(chatId);
-
-      if (paginationData && paginationData.type === "sales") {
-        const pageData = await getGroupedSalesPage(
-          paginationData.doctorCode,
-          page
-        );
-        const messageText = formatGroupedSalesPage(pageData);
-        const buttons = createPaginationButtons(
-          page,
-          pageData.totalPages,
-          "sales"
-        );
-
-        await bot.editMessageText(messageText, {
-          chat_id: chatId,
-          message_id: message.message_id,
-          parse_mode: "Markdown",
-          ...buttons,
-        });
-      }
-    } else if (data.startsWith("remains_page_")) {
-      const page = parseInt(data.split("_")[2]);
-      const paginationData = userPaginationData.get(chatId);
-
-      if (paginationData && paginationData.type === "remains") {
-        const pageData = await getBranchGroupedRemainsPage(
-          paginationData.supplierName,
-          page
-        );
-        const messageText = formatBranchGroupedRemainsPage(pageData);
-        const buttons = createPaginationButtons(
-          page,
-          pageData.totalPages,
-          "remains"
-        );
-
-        await bot.editMessageText(messageText, {
-          chat_id: chatId,
-          message_id: message.message_id,
-          parse_mode: "Markdown",
-          ...buttons,
-        });
-      }
-    } else if (data === "sales_close" || data === "remains_close") {
-      userPaginationData.delete(chatId);
-      await bot.deleteMessage(chatId, message.message_id);
-    } else if (data === "info") {
-      // Do nothing
-    }
-
-    await bot.answerCallbackQuery(callbackQuery.id);
-  } catch (error) {
-    console.error("Callback query ошибка:", error);
-    await bot.answerCallbackQuery(callbackQuery.id, {
-      text: "Произошла ошибка",
-    });
+    console.error("❌ /start error:", error);
+    await bot.sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
   }
 });
 
+// ИСПРАВЛЕНИЕ: Улучшенная обработка сообщений
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (text === "/start") return;
-
-  const userState = userStates.get(chatId) || {};
+  // Игнорируем команды и пустые сообщения
+  if (!text || text.startsWith("/")) return;
 
   try {
-    // Основные команды
-    if (text === "👨‍⚕️ Войти как врач") {
-      userStates.set(chatId, { type: "doctor_login", step: "username" });
-      bot.sendMessage(chatId, "👤 Введите логин:");
-      return;
-    }
+    await bot.sendChatAction(chatId, "typing");
 
-    if (text === "🏭 Войти как поставщик") {
-      userStates.set(chatId, { type: "supplier_login", step: "username" });
-      bot.sendMessage(chatId, "👤 Введите логин:");
-      return;
-    }
+    const telegramUser = await TelegramUser.findOne({ chatId });
+    const state = getUserState(chatId);
 
-    if (text === "🚪 Выйти") {
-      await TelegramUser.deleteOne({ chatId });
-      userStates.delete(chatId);
-      userPaginationData.delete(chatId);
-      bot.sendMessage(chatId, "👋 Вы вышли из системы", mainMenu);
-      return;
-    }
+    console.log(
+      `DEBUG: chatId=${chatId}, text="${text}", state=`,
+      state,
+      "telegramUser=",
+      telegramUser ? "exists" : "none"
+    );
 
-    // Авторизация врача
-    if (userState.type === "doctor_login") {
-      if (userState.step === "username") {
-        userState.username = text;
-        userState.step = "password";
-        userStates.set(chatId, userState);
-        bot.sendMessage(chatId, "🔐 Введите пароль:");
+    // Процесс логина для новых пользователей
+    if (!telegramUser) {
+      if (text === "👨‍⚕️ Войти как врач") {
+        setUserState(chatId, { step: "doctor_login" });
+        await bot.sendMessage(
+          chatId,
+          "👨‍⚕️ *ВХОД ДЛЯ ВРАЧА*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nВведите ваш уникальный код врача:",
+          { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+        );
         return;
-      }
-
-      if (userState.step === "password") {
+      } else if (text === "🏭 Войти как поставщик") {
+        setUserState(chatId, { step: "supplier_login" });
+        await bot.sendMessage(
+          chatId,
+          "🏭 *ВХОД ДЛЯ ПОСТАВЩИКА*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nВведите ваш логин поставщика:",
+          { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+        );
+        return;
+      } else if (state && state.step === "doctor_login") {
+        // Обработка кода врача
+        const doctorCode = text.trim();
         const doctor = await Doctor.findOne({
-          login: userState.username,
-          password: text,
+          code: doctorCode,
+          isActive: true,
         });
 
-        if (doctor) {
-          if (!doctor.isActive) {
-            userStates.delete(chatId);
-            bot.sendMessage(
-              chatId,
-              "❌ Ваш аккаунт деактивирован. Обратитесь к администратору.",
-              mainMenu
-            );
-            return;
-          }
-
-          if (doctor.activeUntil && new Date(doctor.activeUntil) < new Date()) {
-            userStates.delete(chatId);
-            bot.sendMessage(
-              chatId,
-              "❌ Срок активации вашего аккаунта истек. Обратитесь к администратору для продления.",
-              mainMenu
-            );
-            return;
-          }
-
-          await TelegramUser.findOneAndUpdate(
-            { chatId },
-            { chatId, userType: "doctor", userId: doctor._id },
-            { upsert: true }
-          );
-
-          userStates.delete(chatId);
-          bot.sendMessage(
+        if (!doctor) {
+          await bot.sendMessage(
             chatId,
-            `✅ Добро пожаловать, ${doctor.name}!`,
-            doctorMenu
+            "❌ Врач с таким кодом не найден или аккаунт неактивен.",
+            mainMenu
           );
-        } else {
           userStates.delete(chatId);
-          bot.sendMessage(chatId, "❌ Неверные данные для входа", mainMenu);
+          return;
         }
-        return;
-      }
-    }
 
-    // Авторизация поставщика
-    if (userState.type === "supplier_login") {
-      if (userState.step === "username") {
-        userState.username = text;
-        userState.step = "password";
-        userStates.set(chatId, userState);
-        bot.sendMessage(chatId, "🔐 Введите пароль:");
-        return;
-      }
+        // Проверяем срок активности
+        if (doctor.activeUntil && new Date(doctor.activeUntil) < new Date()) {
+          await bot.sendMessage(
+            chatId,
+            "❌ Срок действия вашего аккаунта истек.",
+            mainMenu
+          );
+          return;
+        }
 
-      if (userState.step === "password") {
+        // Сохраняем пользователя Telegram
+        await TelegramUser.create({
+          chatId,
+          userId: doctor._id,
+          userType: "doctor",
+          username: msg.from.username || msg.from.first_name,
+        });
+
+        userStates.delete(chatId);
+        await bot.sendMessage(
+          chatId,
+          `✅ Успешный вход!\n👋 Добро пожаловать, Dr. ${doctor.name}!`,
+          doctorMenu
+        );
+        return;
+      } else if (state && state.step === "supplier_login") {
+        // Обработка логина поставщика
+        const supplierUsername = text.trim();
         const supplier = await Supplier.findOne({
-          username: userState.username,
-          password: text,
+          username: supplierUsername,
+          isActive: true,
         });
 
-        if (supplier) {
-          if (!supplier.isActive) {
-            userStates.delete(chatId);
-            bot.sendMessage(
-              chatId,
-              "❌ Ваш аккаунт деактивирован. Обратитесь к администратору для активации.",
-              mainMenu
-            );
-            return;
-          }
-
-          if (
-            supplier.activeUntil &&
-            new Date(supplier.activeUntil) < new Date()
-          ) {
-            userStates.delete(chatId);
-            bot.sendMessage(
-              chatId,
-              "❌ Срок активации вашего аккаунта истек. Обратитесь к администратору для продления.",
-              mainMenu
-            );
-            return;
-          }
-
-          await TelegramUser.findOneAndUpdate(
-            { chatId },
-            { chatId, userType: "supplier", userId: supplier._id },
-            { upsert: true }
-          );
-
-          userStates.delete(chatId);
-          bot.sendMessage(
+        if (!supplier) {
+          await bot.sendMessage(
             chatId,
-            `✅ Добро пожаловать, ${supplier.name}!`,
-            supplierMenu
+            "❌ Поставщик с таким логином не найден или аккаунт неактивен.",
+            mainMenu
           );
-        } else {
           userStates.delete(chatId);
-          bot.sendMessage(chatId, "❌ Неверные данные для входа", mainMenu);
+          return;
         }
+
+        // Проверяем срок активности
+        if (
+          supplier.activeUntil &&
+          new Date(supplier.activeUntil) < new Date()
+        ) {
+          await bot.sendMessage(
+            chatId,
+            "❌ Срок действия вашего аккаунта истек.",
+            mainMenu
+          );
+          return;
+        }
+
+        // Сохраняем пользователя Telegram
+        await TelegramUser.create({
+          chatId,
+          userId: supplier._id,
+          userType: "supplier",
+          username: msg.from.username || msg.from.first_name,
+        });
+
+        userStates.delete(chatId);
+        await bot.sendMessage(
+          chatId,
+          `✅ Успешный вход!\n👋 Добро пожаловать, ${supplier.name}!`,
+          supplierMenu
+        );
+        return;
+      } else {
+        // Неизвестная команда для неавторизованного пользователя
+        await bot.sendMessage(
+          chatId,
+          "👋 Добро пожаловать! Выберите тип аккаунта для входа:",
+          mainMenu
+        );
         return;
       }
     }
 
     // Команды для авторизованных пользователей
-    const telegramUser = await TelegramUser.findOne({ chatId });
-    if (!telegramUser) {
-      bot.sendMessage(chatId, "🔐 Пожалуйста, войдите в систему", mainMenu);
-      return;
-    }
-
-    // Команды врача
     if (telegramUser.userType === "doctor") {
       const doctor = await Doctor.findById(telegramUser.userId);
 
+      // Проверка активности врача
       if (
         !doctor ||
         !doctor.isActive ||
@@ -1023,7 +827,7 @@ bot.on("message", async (msg) => {
         await TelegramUser.deleteOne({ chatId });
         userStates.delete(chatId);
         userPaginationData.delete(chatId);
-        bot.sendMessage(
+        await bot.sendMessage(
           chatId,
           "❌ Ваш аккаунт был деактивирован или срок активации истек.",
           mainMenu
@@ -1031,37 +835,74 @@ bot.on("message", async (msg) => {
         return;
       }
 
+      // Обработка команд врача
       if (text === "📊 Мои продажи") {
-        const pageData = await getGroupedSalesPage(doctor.code, 1);
-
-        if (pageData.totalChecks === 0) {
-          bot.sendMessage(chatId, "📊 У вас пока нет продаж");
-          return;
-        }
-
-        userPaginationData.set(chatId, {
-          type: "sales",
-          doctorCode: doctor.code,
-        });
-
-        const messageText = formatGroupedSalesPage(pageData);
-        const buttons = createPaginationButtons(
-          1,
-          pageData.totalPages,
-          "sales"
+        const loadingMsg = await sendLoadingMessage(
+          chatId,
+          "📊 Загрузка продаж...\n⏰ Пожалуйста, подождите"
         );
 
-        bot.sendMessage(chatId, messageText, {
-          parse_mode: "Markdown",
-          ...buttons,
-        });
+        try {
+          const pageData = await getDoctorSalesPage(doctor.code, 1);
+
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+          if (pageData.totalSales === 0) {
+            await bot.sendMessage(chatId, "📊 У вас пока нет продаж");
+            return;
+          }
+
+          userPaginationData.set(chatId, {
+            type: "sales",
+            doctorCode: doctor.code,
+            currentPage: 1,
+          });
+
+          const messageText = formatDoctorSalesPage(pageData);
+          const buttons = createSalesPaginationButtons(
+            1,
+            pageData.totalPages,
+            pageData.totalSales,
+            pageData.sales
+          );
+
+          await bot.sendMessage(chatId, messageText, {
+            parse_mode: "Markdown",
+            ...buttons,
+          });
+        } catch (error) {
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+          await bot.sendMessage(
+            chatId,
+            error.message || "❌ Ошибка загрузки продаж"
+          );
+        }
+        return;
+      } else if (text === "🚪 Выйти") {
+        await TelegramUser.deleteOne({ chatId });
+        userStates.delete(chatId);
+        userPaginationData.delete(chatId);
+        await bot.sendMessage(
+          chatId,
+          "👋 Вы вышли из системы. Чтобы войти снова, используйте /start",
+          { reply_markup: { remove_keyboard: true } }
+        );
+        return;
+      } else {
+        await bot.sendMessage(
+          chatId,
+          "❓ Используйте кнопки меню для навигации.",
+          doctorMenu
+        );
         return;
       }
     }
 
-    // Команды поставщика
+    // Команды для поставщика
     if (telegramUser.userType === "supplier") {
       const supplier = await Supplier.findById(telegramUser.userId);
+
+      // Проверка активности поставщика
       if (
         !supplier ||
         !supplier.isActive ||
@@ -1070,7 +911,7 @@ bot.on("message", async (msg) => {
         await TelegramUser.deleteOne({ chatId });
         userStates.delete(chatId);
         userPaginationData.delete(chatId);
-        bot.sendMessage(
+        await bot.sendMessage(
           chatId,
           "❌ Ваш аккаунт был деактивирован или срок активации истек.",
           mainMenu
@@ -1078,88 +919,298 @@ bot.on("message", async (msg) => {
         return;
       }
 
+      // Обработка команд поставщика
       if (text === "📦 Остатки") {
-        const pageData = await getBranchGroupedRemainsPage(supplier.name, 1);
-
-        if (pageData.totalProducts === 0) {
-          bot.sendMessage(chatId, "📦 Остатки не найдены");
-          return;
-        }
-
-        userPaginationData.set(chatId, {
-          type: "remains",
-          supplierName: supplier.name,
-        });
-
-        const messageText = formatBranchGroupedRemainsPage(pageData);
-        const buttons = createPaginationButtons(
-          1,
-          pageData.totalPages,
-          "remains"
-        );
-
-        bot.sendMessage(chatId, messageText, {
-          parse_mode: "Markdown",
-          ...buttons,
-        });
-        return;
-      }
-
-      if (text === "📈 Статистика") {
-        const loadingMessage = await bot.sendMessage(
+        const loadingMsg = await sendLoadingMessage(
           chatId,
-          "📊 Подготавливаю детальную аналитику...\n⏰ Пожалуйста, подождите несколько секунд",
-          { parse_mode: "Markdown" }
+          "📦 Загрузка остатков...\n⏰ Пожалуйста, подождите"
         );
 
         try {
-          const stats = await calculateSupplierStatistics(supplier.name);
-          const statisticsMessage = createProfessionalStatisticsMessage(
-            supplier,
-            stats
+          const pageData = await getAllRemainsPage(supplier.name, 1);
+
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+          if (pageData.totalRemains === 0) {
+            await bot.sendMessage(chatId, "📦 Остатки не найдены");
+            return;
+          }
+
+          userPaginationData.set(chatId, {
+            type: "remains",
+            supplierName: supplier.name,
+            currentPage: 1,
+          });
+
+          const messageText = formatAllRemainsPage(pageData);
+          const buttons = createAllRemainsPaginationButtons(
+            1,
+            pageData.totalPages,
+            pageData.totalRemains
           );
 
-          await bot.deleteMessage(chatId, loadingMessage.message_id);
+          await bot.sendMessage(chatId, messageText, {
+            parse_mode: "Markdown",
+            ...buttons,
+          });
+        } catch (error) {
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+          await bot.sendMessage(
+            chatId,
+            error.message || "❌ Ошибка загрузки остатков"
+          );
+        }
+        return;
+      } else if (text === "📈 Статистика") {
+        const loadingMsg = await sendLoadingMessage(
+          chatId,
+          "📊 Подготавливаю детальную аналитику...\n⏰ Пожалуйста, подождите несколько секунд"
+        );
+
+        try {
+          const statisticsMessage = await createProfessionalStatisticsMessage(
+            supplier,
+            supplier.name
+          );
+
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
           await bot.sendMessage(chatId, statisticsMessage, {
             parse_mode: "Markdown",
           });
         } catch (error) {
-          await bot.deleteMessage(chatId, loadingMessage.message_id);
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
           await bot.sendMessage(
             chatId,
-            "❌ Произошла ошибка при создании отчёта. Попробуйте позже."
+            error.message ||
+              "❌ Произошла ошибка при создании отчёта. Попробуйте позже."
           );
           console.error("Statistics generation error:", error);
         }
         return;
+      } else if (text === "🚪 Выйти") {
+        await TelegramUser.deleteOne({ chatId });
+        userStates.delete(chatId);
+        userPaginationData.delete(chatId);
+        await bot.sendMessage(
+          chatId,
+          "👋 Вы вышли из системы. Чтобы войти снова, используйте /start",
+          { reply_markup: { remove_keyboard: true } }
+        );
+        return;
+      } else {
+        await bot.sendMessage(
+          chatId,
+          "❓ Используйте кнопки меню для навигации.",
+          supplierMenu
+        );
+        return;
       }
     }
-
-    // Неизвестная команда
-    if (telegramUser.userType === "doctor") {
-      bot.sendMessage(
-        chatId,
-        "❓ Команда не распознана. Используйте меню.",
-        doctorMenu
-      );
-    } else if (telegramUser.userType === "supplier") {
-      bot.sendMessage(
-        chatId,
-        "❓ Команда не распознана. Используйте меню.",
-        supplierMenu
-      );
-    } else {
-      bot.sendMessage(chatId, "❓ Команда не распознана", mainMenu);
-    }
   } catch (error) {
-    console.error("❌ Бот ошибка:", error);
-    bot.sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
+    console.error("❌ Bot message handling error:", error);
+    await bot.sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
   }
 });
 
-// ИСПРАВЛЕНО: Новые продажи уведомления функция - to'g'ri quantity hisoblash bilan
+// Sale tafsilotlarini formatlash
+const formatSaleDetails = (sale, items) => {
+  console.log(sale);
+
+  let message = `🧾 *ЧЕК №${sale.number || sale.id || "undefined"}*\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  message += `👨‍⚕️ Dr. ${sale.doctorName || sale.createdBy || "Неизвестен"}\n`;
+  message += `📅 ${
+    sale.date ? new Date(sale.date).toLocaleDateString("ru-RU") : "Неизвестно"
+  }\n`;
+  message += `💰 ${formatNumber(
+    sale.totalAmount || sale.buyAmount || sale.soldAmount || 0
+  )} сум\n\n`;
+  message += `📦 *Товары:*\n`;
+
+  if (items && items.length > 0) {
+    items.forEach((item, index) => {
+      message += `${index + 1}. 💊 ${item.product}\n`;
+      message += `   📊 ${calculatePackages(
+        item.quantity,
+        item.unit,
+        item.pieceCount
+      )}\n`;
+      message += `   💰 ${formatNumber(
+        item.buyAmount || item.soldAmount || 0
+      )} сум\n\n`;
+    });
+  } else {
+    message += `📦 Товары не найдены\n\n`;
+  }
+
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  message += `🤖 _Детали продажи_\n`;
+
+  return message;
+};
+
+// ИСПРАВЛЕНИЕ: Добавляем обработку callback queries для пагинации
+bot.on("callback_query", async (callbackQuery) => {
+  const chatId = callbackQuery.message.chat.id;
+  const data = callbackQuery.data;
+
+  try {
+    if (data.startsWith("sales_page_")) {
+      const page = parseInt(data.split("_")[2]);
+      const paginationData = userPaginationData.get(chatId);
+
+      if (paginationData && paginationData.type === "sales") {
+        const loadingMsg = await sendLoadingMessage(chatId, "🔄 Загрузка...");
+
+        try {
+          const pageData = await getDoctorSalesPage(
+            paginationData.doctorCode,
+            page
+          );
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+          const messageText = formatDoctorSalesPage(pageData);
+          const buttons = createSalesPaginationButtons(
+            page,
+            pageData.totalPages,
+            pageData.totalSales,
+            pageData.sales
+          );
+
+          await bot.editMessageText(messageText, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id,
+            parse_mode: "Markdown",
+            ...buttons,
+          });
+
+          // Update pagination data
+          userPaginationData.set(chatId, {
+            ...paginationData,
+            currentPage: page,
+          });
+        } catch (error) {
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: "Ошибка загрузки страницы",
+          });
+        }
+      }
+    } else if (data.startsWith("sale_detail_")) {
+      const saleIndex = parseInt(data.split("_")[2]);
+      const paginationData = userPaginationData.get(chatId);
+
+      if (paginationData && paginationData.type === "sales") {
+        const loadingMsg = await sendLoadingMessage(
+          chatId,
+          "🔄 Загрузка деталей..."
+        );
+
+        try {
+          const pageData = await getDoctorSalesPage(
+            paginationData.doctorCode,
+            paginationData.currentPage || 1
+          );
+
+          if (pageData.sales[saleIndex]) {
+            const sale = pageData.sales[saleIndex];
+
+            try {
+              const items = await getSalesItems(sale.id);
+
+              await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+              const messageText = formatSaleDetails(sale, items);
+              const buttons = createSaleDetailButtons(
+                sale.id,
+                paginationData.currentPage || 1
+              );
+
+              await bot.sendMessage(chatId, messageText, {
+                parse_mode: "Markdown",
+                ...buttons,
+              });
+            } catch (error) {
+              console.error(`Sale ${sale.id} details error:`, error.message);
+              await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+              // Agar items olishda xato bo'lsa, sale ma'lumotlari bilan ko'rsatish
+              const messageText = formatSaleDetails(sale, []);
+              const buttons = createSaleDetailButtons(
+                sale.id,
+                paginationData.currentPage || 1
+              );
+
+              await bot.sendMessage(chatId, messageText, {
+                parse_mode: "Markdown",
+                ...buttons,
+              });
+            }
+          }
+        } catch (error) {
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: "Ошибка загрузки деталей",
+          });
+        }
+      }
+    } else if (data.startsWith("remains_page_")) {
+      const page = parseInt(data.split("_")[2]);
+      const paginationData = userPaginationData.get(chatId);
+
+      if (paginationData && paginationData.type === "remains") {
+        const loadingMsg = await sendLoadingMessage(chatId, "🔄 Загрузка...");
+
+        try {
+          const pageData = await getAllRemainsPage(
+            paginationData.supplierName,
+            page
+          );
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+
+          const messageText = formatAllRemainsPage(pageData);
+          const buttons = createAllRemainsPaginationButtons(
+            page,
+            pageData.totalPages,
+            pageData.totalRemains
+          );
+
+          await bot.editMessageText(messageText, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id,
+            parse_mode: "Markdown",
+            ...buttons,
+          });
+
+          // Update pagination data
+          userPaginationData.set(chatId, {
+            ...paginationData,
+            currentPage: page,
+          });
+        } catch (error) {
+          await deleteLoadingMessage(chatId, loadingMsg.message_id);
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: "Ошибка загрузки страницы",
+          });
+        }
+      }
+    } else if (data.endsWith("_close")) {
+      await bot.deleteMessage(chatId, callbackQuery.message.message_id);
+    }
+
+    await bot.answerCallbackQuery(callbackQuery.id);
+  } catch (error) {
+    console.error("❌ Callback query error:", error);
+    await bot.answerCallbackQuery(callbackQuery.id, {
+      text: "Произошла ошибка",
+    });
+  }
+});
+
+// ИСПРАВЛЕНО: Новые продажи уведомления функция - to'g'ri quantity hisoblash bilan (API dan)
 export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
   try {
+    const findSale = await Sales.findById(saleId);
     const doctor = await Doctor.findOne({ code: doctorCode });
     if (!doctor || !doctor.isActive) return;
 
@@ -1169,20 +1220,26 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
     });
     if (!telegramUser) return;
 
-    if (telegramUser.lastNotifiedSales?.includes(saleId)) return;
+    // API dan sale items olish (doctors route orqali)
+    const response = await axios.get(
+      `${API_BASE}/doctors/${doctorCode}/items/${saleId}`,
+      {
+        timeout: 5000,
+      }
+    );
+    const items = response.data.data || [];
 
-    const sale = await Sales.findOne({ id: saleId });
-    if (!sale || !sale.items || sale.items.length === 0) return;
+    if (items.length === 0) return;
 
     let message = `🔔 *НОВАЯ ПРОДАЖА*\n`;
     message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     message += `👨‍⚕️ Dr. ${doctor.name}\n`;
-    message += `🧾 Чек №${sale.number}\n`;
-    message += `💰 ${formatNumber(sale.soldAmount)} сум\n`;
-    message += `📅 ${formatDateTime(sale.createdAt)}\n\n`;
+    message += `🧾 Чек №${findSale.number}\n`; // saleId ni number o'rniga ishlatish
+    message += `💰 ${formatNumber(0)} сум\n`; // soldAmount API dan olish mumkin
+    message += `📅 ${formatDateTime(new Date(findSale.modifiedAt))}\n\n`;
     message += `📦 *Товары:*\n`;
 
-    sale.items.forEach((item, index) => {
+    items.forEach((item, index) => {
       message += `${index + 1}. 💊 ${item.product}\n`;
       // ИСПРАВЛЕНО: To'g'ri quantity formatlashtirish
       const displayQuantity = calculatePackages(
@@ -1199,10 +1256,6 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
 
     await bot.sendMessage(telegramUser.chatId, message, {
       parse_mode: "Markdown",
-    });
-
-    await TelegramUser.findByIdAndUpdate(telegramUser._id, {
-      $push: { lastNotifiedSales: saleId },
     });
   } catch (error) {
     console.error("❌ Уведомление отправка ошибка:", error);
@@ -1230,6 +1283,216 @@ export const sendMessageToDoctor = async (chatId, message, doctorName) => {
   } catch (error) {
     console.error(`❌ Ошибка отправки сообщения для Dr. ${doctorName}:`, error);
     return false;
+  }
+};
+
+// Поставщику админ сообщение отправка
+export const sendMessageToSupplier = async (chatId, message, supplierName) => {
+  try {
+    const formattedMessage =
+      `📢 *СООБЩЕНИЕ ОТ АДМИНИСТРАТОРА*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🏭 ${supplierName}\n\n` +
+      `💬 ${message}\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🏥 _Система управления аптекой_\n` +
+      `⏰ _${formatDateTime(new Date())}_`;
+
+    await bot.sendMessage(chatId, formattedMessage, {
+      parse_mode: "Markdown",
+    });
+
+    console.log(`✅ Сообщение отправлено поставщику ${supplierName}`);
+    return true;
+  } catch (error) {
+    console.error(
+      `❌ Ошибка отправки сообщения для поставщика ${supplierName}:`,
+      error
+    );
+    return false;
+  }
+};
+
+// Low stock notification для поставщиков
+export const notifySupplierAboutLowStock = async (
+  supplierId,
+  productName,
+  currentStock,
+  branch
+) => {
+  try {
+    const supplier = await Supplier.findById(supplierId);
+    if (!supplier || !supplier.isActive) return;
+
+    const telegramUser = await TelegramUser.findOne({
+      userId: supplier._id,
+      userType: "supplier",
+    });
+    if (!telegramUser) return;
+
+    const message =
+      `⚠️ *НИЗКИЙ ОСТАТОК ТОВАРА*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🏭 ${supplier.name}\n\n` +
+      `📦 *Товар:* ${productName}\n` +
+      `📊 *Текущий остаток:* ${currentStock}\n` +
+      `🏢 *Филиал:* ${branch}\n\n` +
+      `💡 *Рекомендация:* Пополните остатки в ближайшее время\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 _Автоматическое уведомление_\n` +
+      `⏰ _${formatDateTime(new Date())}_`;
+
+    await bot.sendMessage(telegramUser.chatId, message, {
+      parse_mode: "Markdown",
+    });
+  } catch (error) {
+    console.error("❌ Low stock notification error:", error);
+  }
+};
+
+// Critical stock notification для поставщиков
+export const notifySupplierAboutCriticalStock = async (
+  supplierId,
+  productName,
+  currentStock,
+  branch
+) => {
+  try {
+    const supplier = await Supplier.findById(supplierId);
+    if (!supplier || !supplier.isActive) return;
+
+    const telegramUser = await TelegramUser.findOne({
+      userId: supplier._id,
+      userType: "supplier",
+    });
+    if (!telegramUser) return;
+
+    const message =
+      `🔥 *КРИТИЧЕСКИЙ ОСТАТОК ТОВАРА*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🏭 ${supplier.name}\n\n` +
+      `📦 *Товар:* ${productName}\n` +
+      `📊 *Текущий остаток:* ${currentStock}\n` +
+      `🏢 *Филиал:* ${branch}\n\n` +
+      `🚨 *Срочно:* Необходимо немедленное пополнение!\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 _Автоматическое уведомление_\n` +
+      `⏰ _${formatDateTime(new Date())}_`;
+
+    await bot.sendMessage(telegramUser.chatId, message, {
+      parse_mode: "Markdown",
+    });
+  } catch (error) {
+    console.error("❌ Critical stock notification error:", error);
+  }
+};
+
+// Уведомление о новых заказах для поставщиков
+export const notifySupplierAboutNewOrder = async (supplierId, orderDetails) => {
+  try {
+    const supplier = await Supplier.findById(supplierId);
+    if (!supplier || !supplier.isActive) return;
+
+    const telegramUser = await TelegramUser.findOne({
+      userId: supplier._id,
+      userType: "supplier",
+    });
+    if (!telegramUser) return;
+
+    const { orderId, products, totalAmount, branch, orderDate } = orderDetails;
+
+    let message =
+      `🆕 *НОВЫЙ ЗАКАЗ*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🏭 ${supplier.name}\n\n` +
+      `📋 *Заказ №:* ${orderId}\n` +
+      `💰 *Сумма:* ${formatNumber(totalAmount)} сум\n` +
+      `🏢 *Филиал:* ${branch}\n` +
+      `📅 *Дата:* ${formatDateTime(orderDate)}\n\n` +
+      `📦 *Товары:*\n`;
+
+    products.forEach((product, index) => {
+      message += `${index + 1}. ${product.name} - ${product.quantity} ${
+        product.unit
+      }\n`;
+    });
+
+    message +=
+      `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 _Автоматическое уведомление_\n` +
+      `⏰ _${formatDateTime(new Date())}_`;
+
+    await bot.sendMessage(telegramUser.chatId, message, {
+      parse_mode: "Markdown",
+    });
+  } catch (error) {
+    console.error("❌ New order notification error:", error);
+  }
+};
+
+// Функция для массовой отправки сообщений всем пользователям
+export const broadcastMessage = async (message, userType = null) => {
+  try {
+    const query = userType ? { userType } : {};
+    const users = await TelegramUser.find(query);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const user of users) {
+      try {
+        const formattedMessage =
+          `📢 *МАССОВОЕ УВЕДОМЛЕНИЕ*\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `${message}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `🏥 _Система управления аптекой_\n` +
+          `⏰ _${formatDateTime(new Date())}_`;
+
+        await bot.sendMessage(user.chatId, formattedMessage, {
+          parse_mode: "Markdown",
+        });
+        successCount++;
+
+        // Задержка между отправками чтобы избежать лимитов Telegram
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`❌ Ошибка отправки пользователю ${user.chatId}:`, error);
+        failCount++;
+      }
+    }
+
+    console.log(
+      `✅ Массовая рассылка завершена: ${successCount} успешно, ${failCount} ошибок`
+    );
+    return { successCount, failCount };
+  } catch (error) {
+    console.error("❌ Broadcast message error:", error);
+    return { successCount: 0, failCount: 0 };
+  }
+};
+
+// Функция для получения статистики бота
+export const getBotStatistics = async () => {
+  try {
+    const totalUsers = await TelegramUser.countDocuments();
+    const doctorsCount = await TelegramUser.countDocuments({
+      userType: "doctor",
+    });
+    const suppliersCount = await TelegramUser.countDocuments({
+      userType: "supplier",
+    });
+
+    return {
+      totalUsers,
+      doctorsCount,
+      suppliersCount,
+      activeStates: userStates.size,
+      activePagination: userPaginationData.size,
+    };
+  } catch (error) {
+    console.error("❌ Get bot statistics error:", error);
+    return null;
   }
 };
 

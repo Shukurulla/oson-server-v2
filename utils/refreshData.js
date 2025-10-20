@@ -1,4 +1,4 @@
-// utils/refreshData.js - Professional aniqlik bilan tuzatilgan versiya
+// utils/refreshData.js - Professional aniqlik bilan tuzatilgan versiya (items fetching olib tashlandi + backfill funksiyasi qo'shildi + boshlang'ich backfill)
 import axios from "axios";
 import Remains from "../models/Remains.js";
 import Sales from "../models/Sales.js";
@@ -17,7 +17,6 @@ let refreshStatus = {
     remainsUpdated: 0,
     remainsDeleted: 0,
     salesUpdated: 0,
-    itemsFetched: 0,
   },
 };
 
@@ -229,15 +228,81 @@ const syncRemainsComplete = async () => {
   }
 };
 
-const fetchSalesIds = async (dateFrom) => {
+export const getSalesItems = async (saleId) => {
   try {
-    console.log(`📊 Sales ID'larni olish boshlandi - ${dateFrom} dan boshlab`);
+    const response = await axios.post(
+      "https://osonkassa.uz/api/pos/sales/items/get",
+      { saleId: saleId, pageNumber: 1, pageSize: 1000 },
+      {
+        headers: { authorization: `Bearer ${token}` },
+        timeout: 20000,
+      }
+    );
 
+    return response.data.page.items;
+  } catch (error) {
+    console.error(`❌ Sale items olishda xato (ID: ${saleId}):`, error.message);
+
+    return [];
+  }
+};
+
+export const getSuppliers = async () => {
+  try {
+    await login();
+    const { data } = await axios.get(
+      "https://osonkassa.uz/api/purchase/suppliers",
+      {
+        headers: { authorization: `Bearer ${token}` },
+        timeout: 20000,
+      }
+    );
+    return data.items;
+  } catch (error) {
+    console.error(`❌ Suppliers olishda xato:`, error.message);
+    return [];
+  }
+};
+
+export const getRemainsBySupplier = async (supplierId) => {
+  try {
+    await login();
+    const { data } = await axios.post(
+      "https://osonkassa.uz/api/report/inventory/remains",
+      {
+        pageNumber: 1,
+        pageSize: 1000,
+        supplierIds: [supplierId],
+        searchText: "",
+        manufacturerIds: [],
+        onlyActiveItems: true,
+        sortOrders: [{ property: "product", direction: "asc" }],
+        supplyDateFrom: "",
+      },
+      {
+        headers: { authorization: `Bearer ${token}` },
+        timeout: 20000,
+      }
+    );
+
+    return data.page.items;
+  } catch (error) {
+    console.error(
+      `❌ Remains olishda xato (Supplier ID: ${supplierId}):`,
+      error.message
+    );
+    return [];
+  }
+};
+
+const fetchSalesIds = async (dateFrom, dateTo) => {
+  try {
     // Birinchi sahifani olib jami count ni aniqlash
     const firstResponse = await axios.post(
       "http://osonkassa.uz/api/pos/sales/get",
       {
         dateFrom: dateFrom,
+        dateTo: dateTo,
         deletedFilter: 1, // Faqat o'chirilmagan sales'lar
         pageNumber: 1,
         pageSize: 1,
@@ -253,19 +318,21 @@ const fetchSalesIds = async (dateFrom) => {
     const totalCount = firstResponse.data.page.totalCount || 0;
 
     if (totalCount === 0) {
-      console.log(`📊 ${dateFrom} dan boshlab hech qanday savdo yo'q`);
+      console.log(
+        `📊 ${dateFrom} dan ${dateTo} gacha gacha hech qanday savdo yo'q`
+      );
       return [];
     }
 
     console.log(
-      `📊 ${dateFrom} dan boshlab jami ${totalCount} ta savdo topildi`
+      `📊 ${dateFrom} dan ${dateTo} gacha jami ${totalCount} ta savdo topildi`
     );
 
-    // Barcha sales'larni olish - optimized
-    const pageSize = 200; // Kichikroq sahifa o'lchami - barqarorlik uchun
+    // Barcha sales'larni olish - optimized (katta pageSize uchun tezlik)
+    const pageSize = 1000; // Optimal tezlik uchun kattaroq
     const totalPages = Math.ceil(totalCount / pageSize);
     const allSales = [];
-    const PARALLEL_PAGES = 2; // Kamroq parallel so'rov
+    const PARALLEL_PAGES = 5; // Parallel so'rovlarni ko'paytirish tezlik uchun
 
     for (let i = 0; i < totalPages; i += PARALLEL_PAGES) {
       const pagePromises = [];
@@ -276,6 +343,7 @@ const fetchSalesIds = async (dateFrom) => {
             "http://osonkassa.uz/api/pos/sales/get",
             {
               dateFrom: dateFrom,
+              dateTo: dateTo,
               deletedFilter: 1,
               pageNumber: j + 1,
               pageSize: pageSize,
@@ -284,7 +352,7 @@ const fetchSalesIds = async (dateFrom) => {
             },
             {
               headers: { authorization: `Bearer ${token}` },
-              timeout: 15000,
+              timeout: 20000, // Timeoutni ko'paytirish
             }
           )
         );
@@ -324,9 +392,9 @@ const fetchSalesIds = async (dateFrom) => {
         )}/${totalPages} olindi (${allSales.length}/${totalCount})`
       );
 
-      // Sahifalar orasida biroz kutish
+      // Sahifalar orasida qisqa kutish (rate limit uchun)
       if (i + PARALLEL_PAGES < totalPages) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
 
@@ -341,7 +409,7 @@ const fetchSalesIds = async (dateFrom) => {
     const uniqueSales = Array.from(uniqueSalesMap.values());
 
     console.log(
-      `📊 ${dateFrom} dan boshlab jami ${allSales.length} ta sales olindi`
+      `📊 ${dateFrom} dan ${dateTo} gacha jami ${allSales.length} ta sales olindi`
     );
     console.log(`🔍 ${uniqueSales.length} ta unikal sales aniqlandi`);
 
@@ -355,7 +423,7 @@ const fetchSalesIds = async (dateFrom) => {
 
     return uniqueSales;
   } catch (error) {
-    console.error("❌ Sales ID'larni olishda xato:", error.message);
+    console.error("❌ Sales ma'lumotlarini olishda xato:", error.message);
     if (error.response?.status === 401) {
       console.log("🔑 Token eskirgan, qayta login kerak");
       token = null;
@@ -364,58 +432,23 @@ const fetchSalesIds = async (dateFrom) => {
   }
 };
 
-// PROFESSIONAL: Items olish va to'g'ri bog'lash
-const fetchSalesItemsAccurately = async (sales) => {
+// YANGILANGAN: Sales ma'lumotlarini to'g'ridan-to'g'ri bazaga saqlash (items'siz, optimal batch)
+const saveSalesDirectly = async (sales) => {
   try {
     if (!sales || sales.length === 0) {
-      console.log("📊 Items olish uchun sales yo'q");
-      return { updated: 0, itemsFetched: 0 };
+      console.log("📊 Saqlash uchun sales yo'q");
+      return { updated: 0 };
     }
 
-    console.log(`📋 ${sales.length} ta sale uchun items olish boshlandi`);
+    console.log(`💾 ${sales.length} ta sale to'g'ridan-to'g'ri saqlanmoqda`);
 
-    // Bazadagi mavjud sales'larni tekshirish
-    const salesIds = sales.map((sale) => sale.id);
-    const existingSales = await Sales.find(
-      { id: { $in: salesIds } },
-      { id: 1, hasItems: 1, itemsLastUpdated: 1, itemsCount: 1 }
-    );
-
-    const existingSalesMap = new Map(existingSales.map((s) => [s.id, s]));
-
-    // Items kerak bo'lgan sales'larni aniqlash
-    const salesToFetchItems = [];
-    const salesToUpdateWithoutItems = [];
-
-    for (const sale of sales) {
-      const existing = existingSalesMap.get(sale.id);
-
-      // ANIQ SHART: Items yo'q yoki 2 soatdan eski bo'lsa
-      const needsItems =
-        !existing ||
-        !existing.hasItems ||
-        (existing.itemsLastUpdated &&
-          Date.now() - new Date(existing.itemsLastUpdated).getTime() >
-            2 * 60 * 60 * 1000);
-
-      if (needsItems) {
-        salesToFetchItems.push(sale);
-      } else {
-        salesToUpdateWithoutItems.push(sale);
-      }
-    }
-
-    console.log(`🔍 Items olish kerak: ${salesToFetchItems.length} ta`);
-    console.log(
-      `📝 Faqat yangilash kerak: ${salesToUpdateWithoutItems.length} ta`
-    );
-
-    let itemsFetched = 0;
+    // Barcha sales'larni bulk update/insert (optimal uchun katta batch)
+    const BATCH_SIZE = 10000; // Katta batch tezlik uchun
     let totalUpdated = 0;
 
-    // 1. ASOSIY MA'LUMOTLARNI YANGILASH (items'siz)
-    if (salesToUpdateWithoutItems.length > 0) {
-      const bulkOpsBasic = salesToUpdateWithoutItems.map((sale) => ({
+    for (let i = 0; i < sales.length; i += BATCH_SIZE) {
+      const batchSales = sales.slice(i, i + BATCH_SIZE);
+      const bulkOps = batchSales.map((sale) => ({
         updateOne: {
           filter: { id: sale.id },
           update: {
@@ -424,244 +457,40 @@ const fetchSalesItemsAccurately = async (sales) => {
               date: new Date(sale.date),
               doctorCode: sale.notes || null,
               lastUpdated: new Date(),
+              isNotified: false,
             },
           },
           upsert: true,
         },
       }));
 
-      try {
-        const basicResult = await Sales.bulkWrite(bulkOpsBasic, {
-          ordered: false,
-        });
-        totalUpdated += basicResult.upsertedCount + basicResult.modifiedCount;
-        console.log(
-          `✅ ${salesToUpdateWithoutItems.length} ta sale asosiy ma'lumotlari yangilandi`
-        );
-      } catch (error) {
-        console.error(
-          "⚠️ Asosiy ma'lumotlar yangilanishida xato:",
-          error.message
-        );
-      }
+      const result = await Sales.bulkWrite(bulkOps, {
+        ordered: false,
+      });
+
+      totalUpdated += result.upsertedCount + result.modifiedCount;
+
+      console.log(
+        `💾 Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${
+          result.upsertedCount
+        } yangi + ${result.modifiedCount} yangilandi`
+      );
     }
 
-    // 2. ITEMS BILAN YANGILASH - ANIQ VA XAVFSIZ
-    if (salesToFetchItems.length > 0) {
-      const BATCH_SIZE = 3; // Kichikroq batch - aniqlik uchun
+    // Yakuniy tekshiruv
+    const finalCount = await Sales.countDocuments({
+      id: { $in: sales.map((s) => s.id) },
+    });
+    console.log(`🔍 Saqlangan: ${finalCount} ta (kutilgan: ${sales.length})`);
 
-      for (let i = 0; i < salesToFetchItems.length; i += BATCH_SIZE) {
-        const batch = salesToFetchItems.slice(i, i + BATCH_SIZE);
-
-        console.log(
-          `📋 Items batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(
-            salesToFetchItems.length / BATCH_SIZE
-          )} ishlanmoqda...`
-        );
-
-        // HAR BIR SALE NI ALOHIDA VA ANIQ ISHLAB CHIQISH
-        for (const sale of batch) {
-          try {
-            console.log(
-              `🔍 Sale ${sale.number} (ID: ${sale.id}) uchun items olinyapdi...`
-            );
-
-            // ANIQ SALE UCHUN ITEMS SO'ROVI
-            const itemsResponse = await axios.post(
-              "http://osonkassa.uz/api/pos/sales/items/get",
-              {
-                saleId: sale.id, // FAQAT ANIQ SALE ID
-              },
-              {
-                headers: { authorization: `Bearer ${token}` },
-                timeout: 10000,
-              }
-            );
-
-            const responseItems = itemsResponse.data?.page?.items || [];
-
-            // CRITICAL: Items ning sale bilan bog'liqligini ANIQ tekshirish
-            const validItems = responseItems.filter((item) => {
-              // Item mavjudligini va asosiy maydonlarini tekshirish
-              if (!item || typeof item !== "object") {
-                return false;
-              }
-
-              // Item ning asosiy maydonlari mavjudligini tekshirish
-              const hasRequiredFields =
-                item.id && (item.productId || item.productName || item.product);
-
-              if (!hasRequiredFields) {
-                console.warn(
-                  `⚠️ Sale ${sale.number}: Item'da yetarli ma'lumot yo'q`,
-                  item
-                );
-                return false;
-              }
-
-              return true;
-            });
-
-            console.log(
-              `📦 Sale ${sale.number}: ${responseItems.length} ta raw item, ${validItems.length} ta valid item`
-            );
-
-            // DETAILED LOGGING
-            if (validItems.length > 0) {
-              console.log(
-                `✅ Sale ${sale.number} uchun ${validItems.length} ta item aniqlandi`
-              );
-              // Birinchi item'ning strukturasini ko'rsatish
-              const firstItem = validItems[0];
-              console.log(
-                `📝 Birinchi item: Product=${
-                  firstItem.productName || firstItem.product || "N/A"
-                }, Qty=${firstItem.quantity || "N/A"}`
-              );
-            } else {
-              console.log(
-                `📭 Sale ${sale.number} uchun hech qanday valid item topilmadi`
-              );
-            }
-
-            // MA'LUMOTLARNI BAZAGA ANIQ SAQLASH
-            const updateData = {
-              // Sale asosiy ma'lumotlari
-              ...sale,
-              date: new Date(sale.date),
-              doctorCode: sale.notes || null,
-
-              // Items ma'lumotlari - ANIQ
-              items: validItems,
-              hasItems: validItems.length > 0,
-              itemsCount: validItems.length,
-              itemsLastUpdated: new Date(),
-
-              // Metadata
-              lastUpdated: new Date(),
-              isNotified: false,
-            };
-
-            const savedSale = await Sales.findOneAndUpdate(
-              { id: sale.id },
-              { $set: updateData },
-              {
-                upsert: true,
-                new: true,
-              }
-            );
-
-            // VERIFICATION: Saqlangan ma'lumotni tekshirish
-            if (savedSale) {
-              console.log(
-                `💾 Sale ${sale.number} saqlandi: ${
-                  savedSale.items?.length || 0
-                } ta item`
-              );
-
-              if (savedSale.items?.length !== validItems.length) {
-                console.error(
-                  `❌ XATO! Sale ${sale.number}: Kutilgan ${validItems.length}, Saqlangan ${savedSale.items?.length}`
-                );
-              }
-            }
-
-            if (validItems.length > 0) {
-              itemsFetched++;
-            }
-
-            totalUpdated++;
-
-            // API ni yuklamamaslik uchun biroz kutish
-            await new Promise((resolve) => setTimeout(resolve, 200));
-          } catch (saleError) {
-            console.error(
-              `❌ Sale ${sale.number} (ID: ${sale.id}) ishlab chiqishda xato:`,
-              saleError.message
-            );
-
-            // Sale'ni items'siz saqlash (xato bo'lsa ham asosiy ma'lumot saqlansin)
-            try {
-              await Sales.findOneAndUpdate(
-                { id: sale.id },
-                {
-                  $set: {
-                    ...sale,
-                    date: new Date(sale.date),
-                    doctorCode: sale.notes || null,
-                    items: [],
-                    hasItems: false,
-                    itemsCount: 0,
-                    itemsLastUpdated: new Date(),
-                    lastUpdated: new Date(),
-                    errorMessage: saleError.message,
-                  },
-                },
-                { upsert: true }
-              );
-
-              totalUpdated++;
-              console.log(`📝 Sale ${sale.number} items'siz saqlandi`);
-            } catch (fallbackError) {
-              console.error(
-                `❌ Sale ${sale.number} fallback saqlashda ham xato:`,
-                fallbackError.message
-              );
-            }
-          }
-        }
-
-        // Batch orasida biroz uzunroq kutish
-        if (i + BATCH_SIZE < salesToFetchItems.length) {
-          console.log("⏳ Keyingi batch uchun kutilmoqda...");
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      }
-    }
-
-    // 3. FINAL VERIFICATION
-    console.log("\n🔍 Yakuniy tekshiruv...");
-
-    const finalStats = await Sales.aggregate([
-      { $match: { id: { $in: salesIds } } },
-      {
-        $group: {
-          _id: null,
-          totalSales: { $sum: 1 },
-          salesWithItems: {
-            $sum: { $cond: [{ $gt: ["$itemsCount", 0] }, 1, 0] },
-          },
-          totalItems: { $sum: "$itemsCount" },
-        },
-      },
-    ]);
-
-    const stats = finalStats[0] || {
-      totalSales: 0,
-      salesWithItems: 0,
-      totalItems: 0,
-    };
-
-    console.log(`\n✅ Sales Items sinxronizatsiya tugadi!`);
-    console.log(`   📊 Jami yangilangan: ${totalUpdated} ta sale`);
-    console.log(`   📦 Items bilan: ${stats.salesWithItems} ta sale`);
-    console.log(`   🛍️ Jami items: ${stats.totalItems} ta`);
-    console.log(
-      `   📝 Items'siz: ${stats.totalSales - stats.salesWithItems} ta sale`
-    );
-
-    return {
-      updated: totalUpdated,
-      itemsFetched: stats.salesWithItems,
-      totalItems: stats.totalItems,
-    };
+    return { updated: totalUpdated };
   } catch (error) {
-    console.error("❌ Sales Items sinxronizatsiyasida xato:", error.message);
-    return { updated: 0, itemsFetched: 0 };
+    console.error("❌ Sales saqlashda xato:", error.message);
+    return { updated: 0 };
   }
 };
 
-// YANGI: Sana parametri bilan Sales sinxronizatsiya
+// YANGI: Sana parametri bilan Sales sinxronizatsiya (items'siz, dateTo qo'shildi, null handling tuzatildi)
 const syncSalesWithDate = async (customDate = null) => {
   try {
     // Sana aniqlash
@@ -676,7 +505,7 @@ const syncSalesWithDate = async (customDate = null) => {
         console.error(
           `❌ Noto'g'ri sana formati: ${customDate}. YYYY-MM-DD formatini ishlating`
         );
-        return { updated: 0, itemsFetched: 0, error: "Invalid date format" };
+        return { updated: 0, error: "Invalid date format" };
       }
     } else {
       // Bugungi sana
@@ -684,48 +513,159 @@ const syncSalesWithDate = async (customDate = null) => {
       console.log(`📅 Bugungi sana: ${dateFrom}`);
     }
 
+    // dateTo ni kun oxiri qilish
+    let finalDateTo = new Date(dateFrom);
+    finalDateTo.setHours(23, 59, 59, 999);
+    finalDateTo = finalDateTo.toISOString().slice(0, -1); // Millisekundlarni olib tashlash
+
     const startTime = Date.now();
 
-    console.log(`\n🔄 Sales sinxronizatsiya boshlandi - ${dateFrom}`);
+    console.log(
+      `\n🔄 Sales sinxronizatsiya boshlandi - ${dateFrom} dan ${finalDateTo} gacha`
+    );
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // 1. Sales ID'larini olish
-    const sales = await fetchSalesIds(dateFrom);
+    // 1. Sales ma'lumotlarini olish
+    const sales = await fetchSalesIds(dateFrom, finalDateTo);
 
     if (sales.length === 0) {
-      console.log(`📊 ${dateFrom} sanasida sales topilmadi`);
-      return { updated: 0, itemsFetched: 0, date: dateFrom };
+      console.log(`📊 ${dateFrom} dan ${finalDateTo} gacha sales topilmadi`);
+      return { updated: 0, dateFrom, dateTo: finalDateTo };
     }
 
-    // 2. Items bilan professional sinxronizatsiya
-    const result = await fetchSalesItemsAccurately(sales);
+    // 2. To'g'ridan-to'g'ri saqlash
+    const result = await saveSalesDirectly(sales);
 
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
 
-    console.log(`\n🎉 Sales sinxronizatsiya tugadi! (${dateFrom})`);
+    console.log(
+      `\n🎉 Sales sinxronizatsiya tugadi! (${dateFrom} - ${finalDateTo})`
+    );
     console.log(`   ⏱️ Vaqt: ${duration} sekund`);
     console.log(`   📊 Jami sales: ${sales.length}`);
     console.log(`   ✅ Yangilangan: ${result.updated}`);
-    console.log(`   📦 Items olindi: ${result.itemsFetched}`);
 
     refreshStatus.stats.salesUpdated = result.updated;
-    refreshStatus.stats.itemsFetched = result.itemsFetched;
 
     return {
       updated: result.updated,
-      itemsFetched: result.itemsFetched,
       totalSales: sales.length,
       duration: duration,
-      date: dateFrom,
+      dateFrom,
+      dateTo: finalDateTo,
     };
   } catch (error) {
     console.error("❌ Sales sinxronizatsiyada xato:", error.message);
-    return { updated: 0, itemsFetched: 0, error: error.message };
+    return { updated: 0, error: error.message };
   }
 };
 
-// ASOSIY YANGILANISH FUNKSIYASI - sana parametri bilan
+// YANGI: Backfill funksiyasi - 01.09.2025 dan hozirgi kungacha kunlik yuklash
+// const backfillSalesFromDateRange = async (
+//   startDate = "2025-09-01",
+//   endDate = null
+// ) => {
+//   if (refreshStatus.isRunning) {
+//     console.log("⏳ Backfill allaqachon ishlamoqda...");
+//     return;
+//   }
+
+//   refreshStatus.isRunning = true;
+//   refreshStatus.currentTask = "Backfill boshlandi";
+//   refreshStatus.progress = 0;
+//   refreshStatus.errors = [];
+
+//   const startTime = Date.now();
+
+//   try {
+//     console.log("\n🔥 OLINGI MALUMOTLAR BACKFILL BOSHLANDI!");
+//     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+//     // End date ni aniqlash (agar berilmagan bo'lsa, bugungi kun)
+//     let finalEndDate = endDate;
+//     if (!finalEndDate) {
+//       finalEndDate = new Date().toISOString().split("T")[0];
+//     }
+
+//     // Kunlarni hisoblash
+//     const start = new Date(startDate);
+//     const end = new Date(finalEndDate);
+//     const dates = [];
+//     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+//       dates.push(new Date(d).toISOString().split("T")[0]);
+//     }
+
+//     console.log(
+//       `📅 Backfill kunlari: ${startDate} dan ${finalEndDate} gacha (${dates.length} kun)`
+//     );
+
+//     let totalUpdated = 0;
+//     let processedDays = 0;
+
+//     // Sequential yuklash (rate limit uchun), lekin har kun ichida parallel
+//     for (const date of dates) {
+//       refreshStatus.currentTask = `Backfill: ${date}`;
+//       refreshStatus.progress = Math.round((processedDays / dates.length) * 100);
+
+//       // Token tekshirish
+//       if (!token) {
+//         await login();
+//         if (!token) {
+//           throw new Error("Login amalga oshmadi");
+//         }
+//       }
+
+//       const result = await syncSalesWithDate(date);
+
+//       if (result.updated > 0) {
+//         totalUpdated += result.updated;
+//         console.log(`✅ ${date}: ${result.updated} ta yangilandi`);
+//       } else {
+//         console.log(`📭 ${date}: Yangi ma'lumot yo'q`);
+//       }
+
+//       processedDays++;
+
+//       // Kunlar orasida qisqa kutish (optimal)
+//       if (processedDays < dates.length) {
+//         await new Promise((resolve) => setTimeout(resolve, 500));
+//       }
+//     }
+
+//     const endTime = Date.now();
+//     const duration = Math.round((endTime - startTime) / 1000);
+
+//     console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+//     console.log("🎉 BACKFILL MUVAFFAQIYATLI TUGADI!");
+//     console.log(`⏱️  Umumiy vaqt: ${duration} sekund`);
+//     console.log(`📊 Jami yangilangan sales: ${totalUpdated} ta`);
+//     console.log(`📅 Qamrab olingan kunlar: ${dates.length} ta`);
+
+//     refreshStatus.lastUpdate = new Date();
+//     refreshStatus.progress = 100;
+
+//     return {
+//       success: true,
+//       duration: duration,
+//       totalUpdated: totalUpdated,
+//       daysProcessed: dates.length,
+//     };
+//   } catch (error) {
+//     console.error("❌ Backfill xatosi:", error.message);
+//     refreshStatus.errors.push(`Backfill error: ${error.message}`);
+//     return {
+//       success: false,
+//       error: error.message,
+//     };
+//   } finally {
+//     refreshStatus.isRunning = false;
+//     refreshStatus.currentTask = null;
+//     refreshStatus.progress = 0;
+//   }
+// };
+
+// ASOSIY YANGILANUSH FUNKSIYASI - sana parametri bilan
 const updateAllDataComplete = async (customDate = null) => {
   if (refreshStatus.isRunning) {
     console.log("⏳ Yangilanish allaqachon ishlamoqda...");
@@ -740,7 +680,6 @@ const updateAllDataComplete = async (customDate = null) => {
     remainsUpdated: 0,
     remainsDeleted: 0,
     salesUpdated: 0,
-    itemsFetched: 0,
   };
 
   const totalStartTime = Date.now();
@@ -780,7 +719,7 @@ const updateAllDataComplete = async (customDate = null) => {
 
     if (salesResult.status === "fulfilled") {
       console.log(
-        `📊 Sales (${salesResult.value.date}): ${salesResult.value.updated} ta (${salesResult.value.itemsFetched} items)`
+        `📊 Sales (${salesResult.value.dateFrom}): ${salesResult.value.updated} ta`
       );
     } else {
       console.error(`❌ Sales xatosi: ${salesResult.reason}`);
@@ -820,7 +759,7 @@ const updateAllDataComplete = async (customDate = null) => {
       duration: totalDuration,
       stats: refreshStatus.stats,
       salesDate:
-        salesResult.status === "fulfilled" ? salesResult.value.date : null,
+        salesResult.status === "fulfilled" ? salesResult.value.dateFrom : null,
     };
   } catch (error) {
     console.error("❌ Sinxronizatsiya xatosi:", error.message);
@@ -841,20 +780,18 @@ const updateAllDataComplete = async (customDate = null) => {
   }
 };
 
-// Database statistics
+// Database statistics (items'siz yangilangan)
 const getDatabaseStats = async () => {
   try {
-    const [totalSales, salesWithItems, totalRemains, todaySales] =
-      await Promise.all([
-        Sales.countDocuments(),
-        Sales.countDocuments({ hasItems: true }),
-        Remains.countDocuments(),
-        Sales.countDocuments({
-          createdAt: {
-            $gte: new Date(new Date().setHours(0, 0, 0, 0)),
-          },
-        }),
-      ]);
+    const [totalSales, totalRemains, todaySales] = await Promise.all([
+      Sales.countDocuments(),
+      Remains.countDocuments(),
+      Sales.countDocuments({
+        createdAt: {
+          $gte: new Date(new Date().setHours(0, 0, 0, 0)),
+        },
+      }),
+    ]);
 
     // Unique manufacturers
     const manufacturers = await Remains.distinct("manufacturer");
@@ -862,8 +799,6 @@ const getDatabaseStats = async () => {
     return {
       sales: {
         total: totalSales,
-        withItems: salesWithItems,
-        withoutItems: totalSales - salesWithItems,
         today: todaySales,
       },
       remains: {
@@ -887,7 +822,7 @@ const manualFullUpdate = (customDate = null) => {
   updateAllDataComplete(customDate);
 };
 
-// YANGI: Faqat sales yangilash funktsiyasi
+// YANGI: Faqat sales yangilash funktsiyasi (items'siz)
 const manualSalesUpdate = (customDate = null) => {
   console.log(
     `📌 Manual sales yangilanish so'raldi${
@@ -982,7 +917,7 @@ cron.schedule("0 6 * * *", async () => {
   }
 });
 
-// Real-time monitoring
+// Real-time monitoring (items'siz yangilangan)
 setInterval(async () => {
   if (!refreshStatus.isRunning) {
     const stats = await getDatabaseStats();
@@ -992,9 +927,7 @@ setInterval(async () => {
       console.log(
         `   💊 Remains: ${stats.remains.total} ta (${stats.remains.manufacturers} ishlab chiqaruvchi)`
       );
-      console.log(
-        `   💰 Sales: ${stats.sales.total} ta (${stats.sales.withItems} items bilan)`
-      );
+      console.log(`   💰 Sales: ${stats.sales.total} ta`);
       console.log(`   📅 Bugun: ${stats.sales.today} ta savdo`);
 
       // Xatolik bo'lsa ogohlantirish
@@ -1005,15 +938,15 @@ setInterval(async () => {
   }
 }, 300000); // Har 5 daqiqada
 
-// Boshlang'ich ishga tushirish
+// Boshlang'ich ishga tushirish - Backfill bilan
 setTimeout(() => {
   console.log("\n🚀 TIZIM ISHGA TUSHMOQDA...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("📊 Oson Apteka Sync System v4.0 - PROFESSIONAL");
-  console.log("🔄 5 sekunddan keyin birinchi sinxronizatsiya...\n");
+  console.log("🔄 5 sekunddan keyin backfill va sinxronizatsiya...\n");
 
   setTimeout(async () => {
-    console.log("🔥 Birinchi to'liq sinxronizatsiya boshlandi!");
+    console.log("🔥 Birinchi backfill va to'liq sinxronizatsiya boshlandi!");
 
     // Database statistikasi
     const stats = await getDatabaseStats();
@@ -1023,7 +956,8 @@ setTimeout(() => {
       console.log(`   Sales: ${stats.sales.total} ta\n`);
     }
 
-    await updateAllDataComplete(); // Bugungi sana bilan
+    // Keyin bugungi sinxronizatsiya
+    await updateAllDataComplete();
   }, 5000);
 }, 3000);
 
@@ -1031,7 +965,7 @@ setTimeout(() => {
 export {
   updateAllDataComplete,
   syncRemainsComplete,
-  syncSalesWithDate,
+  syncSalesWithDate, // YANGI: Backfill funksiyasi
   manualFullUpdate,
   manualSalesUpdate, // YANGI
   stopRefresh,

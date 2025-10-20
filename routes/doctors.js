@@ -2,8 +2,7 @@
 import express from "express";
 import Doctor from "../models/Doctor.js";
 import Sales from "../models/Sales.js";
-import TelegramUser from "../models/TelegramUser.js";
-import { clearDoctorChat, clearAllDoctorChats } from "../utils/telegramBot.js";
+import { getSalesItems } from "../utils/refreshData.js";
 
 const router = express.Router();
 
@@ -204,21 +203,6 @@ router.delete("/:id/clear-chat", async (req, res) => {
   }
 });
 
-// Barcha doktor chatlarini tozalash
-router.post("/clear-all-chats", async (req, res) => {
-  try {
-    const count = await clearAllDoctorChats();
-
-    res.json({
-      success: true,
-      message: `Очищено ${count} чатов врачей`,
-    });
-  } catch (error) {
-    console.error("Clear all chats error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
 // ASOSIY: Doktor savdolarini olish (filter bilan) - TO'G'IRLANGAN
 router.get("/:id/sales", async (req, res) => {
   try {
@@ -232,7 +216,6 @@ router.get("/:id/sales", async (req, res) => {
       });
     }
 
-    // Filter - notes maydonidan qidirish (chunki doctorCode notes'da saqlanadi)
     let filter = {
       $or: [
         { doctorCode: doctor.code },
@@ -240,7 +223,6 @@ router.get("/:id/sales", async (req, res) => {
         { notes: doctor.code },
         { notes: String(doctor.code) },
       ],
-      hasItems: true,
     };
 
     // Sana filterlari
@@ -257,121 +239,28 @@ router.get("/:id/sales", async (req, res) => {
         filter.createdAt.$lte = toDate;
       }
     }
+    const sales = await Sales.find(filter).sort({ createdAt: -1 });
 
-    const sales = await Sales.find(filter).sort({ createdAt: -1 }).limit(1000);
+    res.status(200).json({ success: true, data: sales });
+  } catch (error) {
+    console.error("Sales fetch error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
-    // Gruppalash kerakmi?
-    if (groupByProduct === "true") {
-      const productStats = {};
-      let totalQuantity = 0;
-      let totalAmount = 0;
-      let totalChecks = sales.length;
-
-      for (const sale of sales) {
-        if (sale.items && sale.items.length > 0) {
-          for (const item of sale.items) {
-            if (
-              searchProduct &&
-              !item.product.toLowerCase().includes(searchProduct.toLowerCase())
-            ) {
-              continue;
-            }
-
-            if (!productStats[item.product]) {
-              productStats[item.product] = {
-                product: item.product,
-                manufacturer: item.manufacturer,
-                totalQuantity: 0,
-                totalAmount: 0,
-                sales: [],
-              };
-            }
-
-            productStats[item.product].totalQuantity += item.quantity || 0;
-            productStats[item.product].totalAmount += item.soldAmount || 0;
-            productStats[item.product].sales.push({
-              saleNumber: sale.number,
-              saleDate: sale.date,
-              quantity: item.quantity,
-              amount: item.soldAmount,
-            });
-
-            totalQuantity += item.quantity || 0;
-            totalAmount += item.soldAmount || 0;
-          }
-        }
-      }
-
-      const groupedData = Object.values(productStats).sort(
-        (a, b) => b.totalQuantity - a.totalQuantity
-      );
-
-      return res.json({
-        success: true,
-        data: {
-          grouped: true,
-          dateRange: {
-            from: dateFrom || "начало",
-            to: dateTo || "сегодня",
-          },
-          searchProduct: searchProduct || null,
-          totalChecks,
-          totalProducts: groupedData.length,
-          totalQuantity,
-          totalAmount,
-          products: groupedData,
-        },
+router.get("/:id/items", async (req, res) => {
+  try {
+    const sale = await getSalesItems(req.params.id);
+    if (!sale) {
+      return res.status(404).json({
+        success: false,
+        message: "Продажа не найдена",
       });
     }
 
-    // Oddiy ko'rinish (jadval uchun)
-    const salesWithProducts = [];
-
-    for (const sale of sales) {
-      if (sale.items && sale.items.length > 0) {
-        if (searchProduct) {
-          const filteredItems = sale.items.filter((item) =>
-            item.product.toLowerCase().includes(searchProduct.toLowerCase())
-          );
-
-          if (filteredItems.length > 0) {
-            filteredItems.forEach((item) => {
-              salesWithProducts.push({
-                _id: `${sale._id}_${item.id || Math.random()}`,
-                saleNumber: sale.number,
-                saleDate: sale.date,
-                product: item.product,
-                manufacturer: item.manufacturer,
-                quantity: item.quantity,
-                pieceCount: item.pieceCount,
-                soldAmount: item.soldAmount,
-                series: item.series,
-                createdAt: sale.createdAt,
-              });
-            });
-          }
-        } else {
-          sale.items.forEach((item) => {
-            salesWithProducts.push({
-              _id: `${sale._id}_${item.id || Math.random()}`,
-              saleNumber: sale.number,
-              saleDate: sale.date,
-              product: item.product,
-              manufacturer: item.manufacturer,
-              quantity: item.quantity,
-              pieceCount: item.pieceCount,
-              soldAmount: item.soldAmount,
-              series: item.series,
-              createdAt: sale.createdAt,
-            });
-          });
-        }
-      }
-    }
-
-    res.json({ success: true, data: salesWithProducts });
+    res.json({ success: true, data: sale });
   } catch (error) {
-    console.error("Sales fetch error:", error);
+    console.error("Sale items fetch error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -397,7 +286,6 @@ router.get("/:id/sales-stats", async (req, res) => {
 
     let filter = {
       doctorCode: doctor.code,
-      hasItems: true,
     };
 
     // Sana filterlari

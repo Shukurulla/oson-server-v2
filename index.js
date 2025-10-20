@@ -7,11 +7,11 @@ import authRoutes from "./routes/auth.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import doctorsRoutes from "./routes/doctors.js";
 import suppliersRoutes from "./routes/suppliers.js";
-import backgroundRoutes from "./routes/background.js";
+// import backgroundRoutes from "./routes/background.js";
 import messageRoutes from "./routes/messages.js";
 
 import "./utils/refreshData.js";
-import "./utils/telegramBot.js";
+// import "./utils/telegramBot.js";
 
 dotenv.config();
 
@@ -44,13 +44,22 @@ mongoose.connection.on("error", (err) => {
   console.error("❌ MongoDB xato:", err);
 });
 
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/doctors", doctorsRoutes);
-app.use("/api/suppliers", suppliersRoutes);
-app.use("/api/background", backgroundRoutes);
-app.use("/api/messages", messageRoutes);
+// Routes - middleware tekshiruvi bilan
+const useRoute = (path, route) => {
+  if (typeof route === "function") {
+    app.use(path, route);
+    console.log(`✅ Route yuklandi: ${path}`);
+  } else {
+    console.error(`❌ Route xatosi: ${path} - middleware emas`);
+  }
+};
+
+useRoute("/api/auth", authRoutes);
+useRoute("/api/dashboard", dashboardRoutes);
+useRoute("/api/doctors", doctorsRoutes);
+useRoute("/api/suppliers", suppliersRoutes);
+// useRoute("/api/background", backgroundRoutes);
+useRoute("/api/messages", messageRoutes);
 
 app.get("/", (req, res) => {
   res.json({
