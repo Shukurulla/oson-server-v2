@@ -699,10 +699,10 @@ bot.on("message", async (msg) => {
     // Процесс логина для новых пользователей
     if (!telegramUser) {
       if (text === "👨‍⚕️ Войти как врач") {
-        setUserState(chatId, { step: "doctor_login" });
+        setUserState(chatId, { step: "doctor_login_username" });
         await bot.sendMessage(
           chatId,
-          "👨‍⚕️ *ВХОД ДЛЯ ВРАЧА*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nВведите ваш уникальный код врача:",
+          "👨‍⚕️ *ВХОД ДЛЯ ВРАЧА*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nВведите ваш логин врача:",
           { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
         );
         return;
@@ -714,18 +714,18 @@ bot.on("message", async (msg) => {
           { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
         );
         return;
-      } else if (state && state.step === "doctor_login") {
-        // Обработка кода врача
-        const doctorCode = text.trim();
+      } else if (state && state.step === "doctor_login_username") {
+        // Обработка логина врача
+        const doctorLogin = text.trim();
         const doctor = await Doctor.findOne({
-          code: doctorCode,
+          login: doctorLogin,
           isActive: true,
         });
 
         if (!doctor) {
           await bot.sendMessage(
             chatId,
-            "❌ Врач с таким кодом не найден или аккаунт неактивен.",
+            "❌ Врач с таким логином не найден или аккаунт неактивен.",
             mainMenu
           );
           userStates.delete(chatId);
@@ -739,6 +739,28 @@ bot.on("message", async (msg) => {
             "❌ Срок действия вашего аккаунта истек.",
             mainMenu
           );
+          return;
+        }
+
+        // Переходим к вводу пароля
+        setUserState(chatId, {
+          step: "doctor_login_password",
+          doctorId: doctor._id,
+          doctorLogin: doctorLogin,
+        });
+        await bot.sendMessage(chatId, "🔒 Введите ваш пароль:", {
+          parse_mode: "Markdown",
+          reply_markup: { remove_keyboard: true },
+        });
+        return;
+      } else if (state && state.step === "doctor_login_password") {
+        // Обработка пароля врача
+        const password = text.trim();
+        const doctor = await Doctor.findById(state.doctorId);
+
+        if (!doctor || doctor.password !== password) {
+          await bot.sendMessage(chatId, "❌ Неверный пароль.", mainMenu);
+          userStates.delete(chatId);
           return;
         }
 

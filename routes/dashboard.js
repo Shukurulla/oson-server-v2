@@ -16,7 +16,6 @@ router.get("/stats", async (req, res) => {
       today.getMonth(),
       today.getDate()
     );
-    const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
 
     // Parallel queries для performance
     const [
@@ -25,10 +24,8 @@ router.get("/stats", async (req, res) => {
       totalDoctors,
       totalSuppliers,
       todaySales,
-      yesterdaySales,
       todayRevenueResult,
-      yesterdayRevenueResult,
-      criticalStockResult,
+      totalRevenueResult,
       salesWithItems,
       topSellingProducts,
       recentSales,
@@ -39,57 +36,20 @@ router.get("/stats", async (req, res) => {
       Doctor.countDocuments({ isActive: true }).catch(() => 0),
       Supplier.countDocuments({ isActive: true }).catch(() => 0),
 
-      // Bugungi va kechagi sales
+      // Bugungi sales
       Sales.countDocuments({
         createdAt: { $gte: todayStart },
       }).catch(() => 0),
 
-      Sales.countDocuments({
-        createdAt: {
-          $gte: yesterdayStart,
-          $lt: todayStart,
-        },
-      }).catch(() => 0),
-
-      // Bugungi va kechagi revenue
+      // Bugungi revenue
       Sales.aggregate([
         { $match: { createdAt: { $gte: todayStart } } },
         { $group: { _id: null, total: { $sum: "$soldAmount" } } },
       ]).catch(() => []),
 
+      // Umumiy revenue (barcha savdolar)
       Sales.aggregate([
-        {
-          $match: {
-            createdAt: {
-              $gte: yesterdayStart,
-              $lt: todayStart,
-            },
-          },
-        },
         { $group: { _id: null, total: { $sum: "$soldAmount" } } },
-      ]).catch(() => []),
-
-      // Kritik qoldiqlar
-      Remains.aggregate([
-        {
-          $match: {
-            $or: [
-              { unit: "шт" },
-              { unit: "штук" },
-              { unit: "шт." },
-              { unit: null },
-              { unit: "" },
-            ],
-          },
-        },
-        {
-          $group: {
-            _id: { product: "$product", branch: "$branch" },
-            totalQuantity: { $sum: "$quantity" },
-          },
-        },
-        { $match: { totalQuantity: { $lt: 10 } } },
-        { $count: "total" },
       ]).catch(() => []),
 
       // Sales with items
@@ -120,25 +80,11 @@ router.get("/stats", async (req, res) => {
     ]);
 
     const todayRevenue = todayRevenueResult[0]?.total || 0;
-    const yesterdayRevenue = yesterdayRevenueResult[0]?.total || 0;
-    const criticalStock = criticalStockResult[0]?.total || 0;
+    const totalRevenue = totalRevenueResult[0]?.total || 0;
 
-    // O'zgarishlar hisoblanishi
-    const salesChange =
-      yesterdaySales > 0
-        ? Math.round(((todaySales - yesterdaySales) / yesterdaySales) * 100)
-        : todaySales > 0
-        ? 100
-        : 0;
-
-    const revenueChange =
-      yesterdayRevenue > 0
-        ? Math.round(
-            ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100
-          )
-        : todayRevenue > 0
-        ? 100
-        : 0;
+    // O'zgarishlar hisoblanishi - faqat umumiy ma'lumotlar asosida
+    const salesChange = 0; // O'zgarishlarni ko'rsatmaslik uchun
+    const revenueChange = 0; // O'zgarishlarni ko'rsatmaslik uchun
 
     const responseData = {
       // Asosiy statistikalar
@@ -149,10 +95,8 @@ router.get("/stats", async (req, res) => {
 
       // Bugungi ma'lumotlar
       todaySales,
-      yesterdaySales,
       todayRevenue,
-      yesterdayRevenue,
-      criticalStock,
+      totalRevenue,
 
       // Qo'shimcha ma'lumotlar
       salesWithItems,
@@ -169,10 +113,6 @@ router.get("/stats", async (req, res) => {
       dataQuality: {
         salesCoverage:
           totalSales > 0 ? Math.round((salesWithItems / totalSales) * 100) : 0,
-        criticalStockPercentage:
-          totalRemains > 0
-            ? Math.round((criticalStock / totalRemains) * 100)
-            : 0,
       },
     };
 
@@ -195,6 +135,8 @@ router.get("/stats", async (req, res) => {
         todaySales: 0,
         todayRevenue: 0,
         criticalStock: 0,
+        salesChange: 0,
+        revenueChange: 0,
         lastUpdated: new Date(),
       },
     });
