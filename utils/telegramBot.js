@@ -247,14 +247,36 @@ const fetchSupplierRemainsFromAPI = async (supplierName, page = 1) => {
   try {
     const suppliers = await getSuppliers();
 
-    const supplier = suppliers.find((s) => s.name === supplierName);
+    // 🔹 Tirnoq orasidagi textni olish uchun yordamchi funksiya
+    const getCleanName = (name) => {
+      if (!name) return "";
+      const match = name.match(/"(.*?)"/); // " " orasidagi textni topish
+      return match ? match[1].trim() : name.trim(); // agar yo‘q bo‘lsa, aslini qaytaradi
+    };
+
+    // 🔹 Kiruvchi supplier nomini tozalaymiz
+    const cleanSupplierName = getCleanName(supplierName);
+
+    // 🔹 Ro‘yxatdan mos supplierni topamiz
+    const supplier = suppliers.find((s) => {
+      const cleanName = getCleanName(s.name);
+      return cleanName === cleanSupplierName.toUpperCase();
+    });
+
+    if (!supplier) {
+      console.error(`❌ Supplier topilmadi: ${cleanSupplierName}`);
+      return [];
+    }
+
+    console.log("✅ Topilgan supplier:", supplier);
+
+    // 🔹 Supplier ID orqali ostatka olish
     const response = await getRemainsBySupplier(supplier.id);
-    console.log(response);
 
     return response;
   } catch (error) {
-    console.error("API xatosi (supplier remains):", error.message);
-    throw new Error("Ostatchalarni yuklashda xato yuz berdi");
+    console.error("⚠️ API xatosi (supplier remains):", error.message);
+    throw new Error("Ostatkalarni yuklashda xato yuz berdi");
   }
 };
 
@@ -274,9 +296,9 @@ const getDoctorSalesPage = async (doctorCode, page, limit = 10) => {
       // Sale ma'lumotlarini to'g'rilash
       const saleData = {
         ...sale,
-        id: sale.id || sale._id, // ID ni to'g'rilash
-        itemCount: sale.itemsCount || 0,
-        totalAmount: sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
+        id: sale._id, // ID ni to'g'rilash
+        itemsCount: sale.itemsCount || 0,
+        soldAmount: sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
         doctorName: sale.createdBy || "Неизвестен", // Doktor nomini createdBy dan olish
       };
 
@@ -330,17 +352,20 @@ const formatDoctorSalesPage = (pageData) => {
   if (pageData.sales.length === 0) {
     return message + `📈 У вас пока нет продаж.`;
   }
+  console.log(pageData.sales[0]._doc.date);
 
   pageData.sales.forEach((sale, index) => {
     const saleNumber = (pageData.currentPage - 1) * 10 + index + 1;
-    const dateStr = sale.date
-      ? new Date(sale.date).toLocaleDateString("ru-RU")
+    const dateStr = sale._doc.date
+      ? new Date(sale._doc.date).toLocaleDateString("ru-RU")
+      : sale._doc.createdAt
+      ? new Date(sale._doc.createdAt).toLocaleDateString("ru-RU")
       : "Неизвестно";
 
-    message += `${saleNumber}. 🧾 *Чек №${sale.number || sale.id}*\n`;
+    message += `${saleNumber}. 🧾 *Чек №${sale._doc.number}*\n`;
     message += `   📅 ${dateStr}\n`;
-    message += `   💰 ${formatNumber(sale.totalAmount)} сум\n`;
-    message += `   📦 ${sale.itemCount} товаров\n\n`;
+    message += `   💰 ${formatNumber(sale.soldAmount || 0)} сум\n`;
+    message += `   📦 ${sale.itemsCount || 0} товаров\n\n`;
   });
 
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -707,7 +732,7 @@ bot.on("message", async (msg) => {
         );
         return;
       } else if (text === "🏭 Войти как поставщик") {
-        setUserState(chatId, { step: "supplier_login" });
+        setUserState(chatId, { step: "supplier_login_username" });
         await bot.sendMessage(
           chatId,
           "🏭 *ВХОД ДЛЯ ПОСТАВЩИКА*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nВведите ваш логин поставщика:",
@@ -779,7 +804,7 @@ bot.on("message", async (msg) => {
           doctorMenu
         );
         return;
-      } else if (state && state.step === "supplier_login") {
+      } else if (state && state.step === "supplier_login_username") {
         // Обработка логина поставщика
         const supplierUsername = text.trim();
         const supplier = await Supplier.findOne({
@@ -807,6 +832,28 @@ bot.on("message", async (msg) => {
             "❌ Срок действия вашего аккаунта истек.",
             mainMenu
           );
+          return;
+        }
+
+        // Переходим к вводу пароля
+        setUserState(chatId, {
+          step: "supplier_login_password",
+          supplierId: supplier._id,
+          supplierUsername: supplierUsername,
+        });
+        await bot.sendMessage(chatId, "🔒 Введите ваш пароль:", {
+          parse_mode: "Markdown",
+          reply_markup: { remove_keyboard: true },
+        });
+        return;
+      } else if (state && state.step === "supplier_login_password") {
+        // Обработка пароля поставщика
+        const password = text.trim();
+        const supplier = await Supplier.findById(state.supplierId);
+
+        if (!supplier || supplier.password !== password) {
+          await bot.sendMessage(chatId, "❌ Неверный пароль.", mainMenu);
+          userStates.delete(chatId);
           return;
         }
 
@@ -1038,15 +1085,21 @@ bot.on("message", async (msg) => {
 const formatSaleDetails = (sale, items) => {
   console.log(sale);
 
-  let message = `🧾 *ЧЕК №${sale.number || sale.id || "undefined"}*\n`;
+  let message = `🧾 *ЧЕК №${
+    sale._doc?.number || sale.number || "undefined"
+  }*\n`;
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
   message += `👨‍⚕️ Dr. ${sale.doctorName || sale.createdBy || "Неизвестен"}\n`;
   message += `📅 ${
-    sale.date ? new Date(sale.date).toLocaleDateString("ru-RU") : "Неизвестно"
+    sale.date
+      ? new Date(sale.date).toLocaleDateString("ru-RU")
+      : sale._doc?.date
+      ? new Date(sale._doc.date).toLocaleDateString("ru-RU")
+      : sale.createdAt
+      ? new Date(sale.createdAt).toLocaleDateString("ru-RU")
+      : "Неизвестно"
   }\n`;
-  message += `💰 ${formatNumber(
-    sale.totalAmount || sale.soldAmount || 0
-  )} сум\n\n`;
+  message += `💰 ${formatNumber(sale.soldAmount || 0)} сум\n\n`;
   message += `📦 *Товары:*\n`;
 
   if (items && items.length > 0) {
@@ -1136,7 +1189,7 @@ bot.on("callback_query", async (callbackQuery) => {
             const sale = pageData.sales[saleIndex];
 
             try {
-              const items = await getSalesItems(sale.id);
+              const items = await getSalesItems(sale._doc.id);
 
               await deleteLoadingMessage(chatId, loadingMsg.message_id);
 
@@ -1250,13 +1303,14 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
     const items = response.data.data || [];
 
     if (items.length === 0) return;
+    console.log("findSale. " + findSale);
 
     let message = `🔔 *НОВАЯ ПРОДАЖА*\n`;
     message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     message += `👨‍⚕️ Dr. ${doctor.name}\n`;
-    message += `🧾 Чек №${findSale.number}\n`; // saleId ni number o'rniga ishlatish
+    message += `🧾 Чек №${findSale._doc.number}\n`; // saleId ni number o'rniga ishlatish
     message += `💰 ${formatNumber(0)} сум\n`; // soldAmount API dan olish mumkin
-    message += `📅 ${formatDateTime(new Date(findSale.modifiedAt))}\n\n`;
+    message += `📅 ${formatDateTime(new Date(findSale._doc.date))}\n\n`;
     message += `📦 *Товары:*\n`;
 
     items.forEach((item, index) => {

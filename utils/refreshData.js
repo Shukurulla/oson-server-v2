@@ -230,6 +230,15 @@ const syncRemainsComplete = async () => {
 
 export const getSalesItems = async (saleId) => {
   try {
+    // Login qilish agar token yo'q bo'lsa
+    if (!token) {
+      await login();
+      if (!token) {
+        console.error("❌ Token olish imkoni bo'lmadi");
+        return [];
+      }
+    }
+
     const response = await axios.post(
       "https://osonkassa.uz/api/pos/sales/items/get",
       { saleId: saleId, pageNumber: 1, pageSize: 1000 },
@@ -242,6 +251,11 @@ export const getSalesItems = async (saleId) => {
     return response.data.page.items;
   } catch (error) {
     console.error(`❌ Sale items olishda xato (ID: ${saleId}):`, error.message);
+
+    // Agar 401 xato bo'lsa, tokenni tozalash
+    if (error.response?.status === 401) {
+      token = null;
+    }
 
     return [];
   }
