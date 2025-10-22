@@ -276,7 +276,7 @@ const getDoctorSalesPage = async (doctorCode, page, limit = 10) => {
         ...sale,
         id: sale.id || sale._id, // ID ni to'g'rilash
         itemCount: sale.itemsCount || 0,
-        totalAmount: sale.buyAmount || sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
+        totalAmount: sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
         doctorName: sale.createdBy || "Неизвестен", // Doktor nomini createdBy dan olish
       };
 
@@ -1045,7 +1045,7 @@ const formatSaleDetails = (sale, items) => {
     sale.date ? new Date(sale.date).toLocaleDateString("ru-RU") : "Неизвестно"
   }\n`;
   message += `💰 ${formatNumber(
-    sale.totalAmount || sale.buyAmount || sale.soldAmount || 0
+    sale.totalAmount || sale.soldAmount || 0
   )} сум\n\n`;
   message += `📦 *Товары:*\n`;
 
@@ -1057,9 +1057,7 @@ const formatSaleDetails = (sale, items) => {
         item.unit,
         item.pieceCount
       )}\n`;
-      message += `   💰 ${formatNumber(
-        item.buyAmount || item.soldAmount || 0
-      )} сум\n\n`;
+      message += `   💰 ${formatNumber(item.soldAmount || 0)} сум\n\n`;
     });
   } else {
     message += `📦 Товары не найдены\n\n`;
