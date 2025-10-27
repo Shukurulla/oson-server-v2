@@ -44,12 +44,12 @@ router.get("/stats", async (req, res) => {
       // Bugungi revenue
       Sales.aggregate([
         { $match: { createdAt: { $gte: todayStart } } },
-        { $group: { _id: null, total: { $sum: "$soldAmount" } } },
+        { $group: { _id: null, total: { $sum: "$buyAmount" } } },
       ]).catch(() => []),
 
       // Umumiy revenue (barcha savdolar)
       Sales.aggregate([
-        { $group: { _id: null, total: { $sum: "$soldAmount" } } },
+        { $group: { _id: null, total: { $sum: "$buyAmount" } } },
       ]).catch(() => []),
 
       // Sales with items
@@ -63,7 +63,7 @@ router.get("/stats", async (req, res) => {
           $group: {
             _id: "$items.product",
             totalSold: { $sum: "$items.quantity" },
-            totalRevenue: { $sum: "$items.soldAmount" },
+            totalRevenue: { $sum: "$items.buyAmount" },
           },
         },
         { $sort: { totalSold: -1 } },

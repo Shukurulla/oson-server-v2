@@ -7,7 +7,7 @@ import authRoutes from "./routes/auth.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import doctorsRoutes from "./routes/doctors.js";
 import suppliersRoutes from "./routes/suppliers.js";
-// import backgroundRoutes from "./routes/background.js";
+import backgroundRoutes from "./routes/background.js";
 import messageRoutes from "./routes/messages.js";
 
 import "./utils/refreshData.js";
@@ -58,7 +58,7 @@ useRoute("/api/auth", authRoutes);
 useRoute("/api/dashboard", dashboardRoutes);
 useRoute("/api/doctors", doctorsRoutes);
 useRoute("/api/suppliers", suppliersRoutes);
-// useRoute("/api/background", backgroundRoutes);
+useRoute("/api/background", backgroundRoutes);
 useRoute("/api/messages", messageRoutes);
 
 app.get("/", (req, res) => {
@@ -72,6 +72,7 @@ app.get("/", (req, res) => {
       "GET /api/suppliers",
       "GET /api/messages",
       "GET /api/background/status",
+      "POST /api/background/products/search",
     ],
   });
 });
