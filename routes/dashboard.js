@@ -20,7 +20,8 @@ const getStats = async (startDate, endDate) => {
 
     // 2. Sana formatini to'g'rilash
     const dateFrom = new Date(startDate).toISOString().split("T")[0];
-    const dateTo = new Date(endDate).toISOString().split("T")[0] + "T23:59:59.9999999";
+    const dateTo =
+      new Date(endDate).toISOString().split("T")[0] + "T23:59:59.9999999";
 
     console.log(`📊 Stats so'ralmoqda: ${dateFrom} dan ${dateTo} gacha`);
 
@@ -204,8 +205,8 @@ router.get("/stats", async (req, res) => {
 
       // Bugungi ma'lumotlar (MongoDB'dan)
       todaySales,
-      todayRevenue,
-      totalRevenue,
+      todayRevenue: todayRevenueFromAPI,
+      totalRevenue: totalRevenueFromAPI,
 
       // OsonKassa API'dan ma'lumotlar
       todayRevenueFromAPI, // Bugungi kun uchun buyAmount
