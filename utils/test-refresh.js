@@ -28,8 +28,8 @@ const login = async () => {
     const response = await axios.post(
       "http://osonkassa.uz/api/auth/login",
       {
-        userName: "apteka",
-        password: "00000",
+        userName: "Admin",
+        password: "0000",
       },
       {
         timeout: 10000,

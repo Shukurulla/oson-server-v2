@@ -224,7 +224,7 @@ const calculatePackages = (quantities, unit, pieceCount) => {
 };
 
 // YANGI: API orqali doktor sotuvlarini olish (items'siz)
-const fetchDoctorSalesFromAPI = async (doctorCode, page = 1) => {
+const fetchDoctorSalesFromAPI = async (doctorCode, page = 1, limit = 10) => {
   try {
     let filter = {
       $or: [
@@ -234,8 +234,30 @@ const fetchDoctorSalesFromAPI = async (doctorCode, page = 1) => {
         { notes: String(doctorCode) },
       ],
     };
-    const sales = await Sales.find(filter).sort({ createdAt: -1 });
-    return { data: sales, total: sales.length, pages: 1, currentPage: page };
+
+    // Jami soni va umumiy summa uchun
+    const totalCount = await Sales.countDocuments(filter);
+    const totalAmountResult = await Sales.aggregate([
+      { $match: filter },
+      { $group: { _id: null, total: { $sum: "$saleAmount" } } },
+    ]);
+    const totalAmount =
+      totalAmountResult.length > 0 ? totalAmountResult[0].total : 0;
+
+    // Faqat kerakli sahifadagi ma'lumotlarni olish
+    const skip = (page - 1) * limit;
+    const sales = await Sales.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    return {
+      data: sales,
+      total: totalCount,
+      totalAmount: totalAmount,
+      pages: Math.ceil(totalCount / limit),
+      currentPage: page,
+    };
   } catch (error) {
     console.error("API xatosi (doctor sales):", error.message);
     throw new Error("Sotuvlarni yuklashda xato yuz berdi");
@@ -283,36 +305,30 @@ const fetchSupplierRemainsFromAPI = async (supplierName, page = 1) => {
 // YANGI: Doktor sotuvlarini sahifalash (har sahifada 10 ta sale)
 const getDoctorSalesPage = async (doctorCode, page, limit = 10) => {
   try {
-    const response = await fetchDoctorSalesFromAPI(doctorCode, page);
-    const { data: sales, total } = response;
-
-    // Sahifalash uchun slice qilish
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + limit;
-    const pageSales = sales.slice(startIndex, endIndex);
+    const response = await fetchDoctorSalesFromAPI(doctorCode, page, limit);
+    const { data: sales, total, totalAmount, pages } = response;
 
     // Har bir sale uchun items sonini hisoblash (faqat statistika uchun)
-    const salesWithItemCount = pageSales.map((sale) => {
+    const salesWithItemCount = sales.map((sale) => {
       // Sale ma'lumotlarini to'g'rilash
       const saleData = {
         ...sale,
         id: sale._id, // ID ni to'g'rilash
         itemsCount: sale.itemsCount || 0,
-        soldAmount: sale.soldAmount || 0, // buyAmount ni asosiy summa sifatida ishlatish
+        soldAmount: sale.soldAmount || 0, // Sold amount (deprecated, use saleAmount instead)
         doctorName: sale.createdBy || "Неизвестен", // Doktor nomini createdBy dan olish
       };
 
       return saleData;
     });
 
-    const totalPages = Math.ceil(sales.length / limit);
-
     return {
       sales: salesWithItemCount,
       totalSales: total || 0,
-      totalPages: totalPages || 1,
+      totalAmount: totalAmount || 0, // Jami summa API dan keladi
+      totalPages: pages || 1,
       currentPage: page,
-      hasMore: endIndex < sales.length,
+      hasMore: page < pages,
     };
   } catch (error) {
     throw error;
@@ -352,7 +368,6 @@ const formatDoctorSalesPage = (pageData) => {
   if (pageData.sales.length === 0) {
     return message + `📈 У вас пока нет продаж.`;
   }
-  console.log(pageData.sales[0]._doc.date);
 
   pageData.sales.forEach((sale, index) => {
     const saleNumber = (pageData.currentPage - 1) * 10 + index + 1;
@@ -362,15 +377,20 @@ const formatDoctorSalesPage = (pageData) => {
       ? new Date(sale._doc.createdAt).toLocaleDateString("ru-RU")
       : "Неизвестно";
 
+    const saleAmount = sale._doc.saleAmount || 0;
+
     message += `${saleNumber}. 🧾 *Чек №${sale._doc.number}*\n`;
     message += `   📅 ${dateStr}\n`;
-    message += `   💰 ${formatNumber(sale.soldAmount || 0)} сум\n`;
+    message += `   💰 ${formatNumber(saleAmount)} сум\n`;
     message += `   📦 ${sale.itemsCount || 0} товаров\n\n`;
   });
 
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `📄 Страница ${pageData.currentPage} из ${pageData.totalPages}\n`;
   message += `💰 Всего чеков: ${pageData.totalSales}\n`;
+  message += `💵 *Общая сумма всех продаж: ${formatNumber(
+    pageData.totalAmount || 0
+  )} сум*\n`;
   message += `🤖 _Нажмите на номер чека для деталей_\n`;
 
   return message;
@@ -1099,7 +1119,7 @@ const formatSaleDetails = (sale, items) => {
       ? new Date(sale.createdAt).toLocaleDateString("ru-RU")
       : "Неизвестно"
   }\n`;
-  message += `💰 ${formatNumber(sale.soldAmount || 0)} сум\n\n`;
+  message += `💰 ${formatNumber(sale._doc.saleAmount || 0)} сум\n\n`;
   message += `📦 *Товары:*\n`;
 
   if (items && items.length > 0) {
@@ -1110,7 +1130,7 @@ const formatSaleDetails = (sale, items) => {
         item.unit,
         item.pieceCount
       )}\n`;
-      message += `   💰 ${formatNumber(item.soldAmount || 0)} сум\n\n`;
+      message += `   💰 ${formatNumber(item.salePrice || 0)} сум\n\n`;
     });
   } else {
     message += `📦 Товары не найдены\n\n`;
@@ -1309,7 +1329,7 @@ export const notifyDoctorAboutSale = async (saleId, doctorCode) => {
     message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     message += `👨‍⚕️ Dr. ${doctor.name}\n`;
     message += `🧾 Чек №${findSale._doc.number}\n`; // saleId ni number o'rniga ishlatish
-    message += `💰 ${formatNumber(0)} сум\n`; // soldAmount API dan olish mumkin
+    message += `💰 ${formatNumber(findSale._doc.saleAmount || 0)} сум\n`;
     message += `📅 ${formatDateTime(new Date(findSale._doc.date))}\n\n`;
     message += `📦 *Товары:*\n`;
 

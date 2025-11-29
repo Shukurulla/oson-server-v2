@@ -316,7 +316,7 @@ router.get("/:id/sales-stats", async (req, res) => {
     const dailyStats = new Map();
 
     for (const sale of sales) {
-      totalAmount += sale.soldAmount || 0;
+      totalAmount += sale.saleAmount || 0;
 
       // Kunlik statistika
       const dateKey = sale.date
@@ -332,7 +332,7 @@ router.get("/:id/sales-stats", async (req, res) => {
       }
       const dayStats = dailyStats.get(dateKey);
       dayStats.checks++;
-      dayStats.amount += sale.soldAmount || 0;
+      dayStats.amount += sale.saleAmount || 0;
 
       if (sale.items && sale.items.length > 0) {
         for (const item of sale.items) {
@@ -358,7 +358,7 @@ router.get("/:id/sales-stats", async (req, res) => {
 
           const prod = productMap.get(item.product);
           prod.quantity += item.quantity || 0;
-          prod.amount += item.soldAmount || 0;
+          prod.amount += item.salePrice || 0;
           prod.checks.add(sale.number);
         }
       }
@@ -478,7 +478,7 @@ router.get("/:id/export-sales", async (req, res) => {
             product: item.product,
             manufacturer: item.manufacturer,
             quantity: item.quantity,
-            amount: item.soldAmount,
+            amount: item.salePrice,
             series: item.series,
           });
         }

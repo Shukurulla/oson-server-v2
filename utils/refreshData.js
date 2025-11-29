@@ -27,8 +27,8 @@ const login = async () => {
     const response = await axios.post(
       "http://osonkassa.uz/api/auth/login",
       {
-        userName: "apteka",
-        password: "00000",
+        userName: "Admin",
+        password: "0000",
       },
       {
         timeout: 10000,
@@ -894,40 +894,21 @@ const getSystemStatus = async () => {
   };
 };
 
-// CRON JOBS - Optimizatsiyalangan
-// Har 10 daqiqada yangilanish (bugungi sana bilan)
-cron.schedule("*/10 * * * *", () => {
-  console.log("\n⏰ Muntazam yangilanish (har 10 daqiqa)");
-  updateAllDataComplete(); // Bugungi sana bilan
-});
-
-// Har soat boshida to'liq yangilanish (yangi token bilan)
-cron.schedule("0 * * * *", () => {
-  console.log("\n⏰ Soatlik to'liq yangilanish");
-  token = null; // Yangi token olish
-  updateAllDataComplete(); // Bugungi sana bilan
-});
-
-// Har kuni ertalab 6:00 da to'liq tozalash va yangilash
-cron.schedule("0 6 * * *", async () => {
-  console.log("\n🧹 Kunlik to'liq tozalash va yangilash...");
+// CRON JOB - Har kuni 00:00 da yangilanish
+cron.schedule("0 0 * * *", async () => {
+  console.log("\n🌙 TUNGI YANGILANISH BOSHLANDI (00:00)");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   try {
-    // 30 kundan eski sales'larni o'chirish
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const result = await Sales.deleteMany({
-      createdAt: { $lt: thirtyDaysAgo },
-    });
-
-    console.log(`✅ ${result.deletedCount} ta eski sales o'chirildi`);
-
-    // To'liq yangilash
+    // Token yangilash
     token = null;
-    await updateAllDataComplete(); // Bugungi sana bilan
+
+    // To'liq sinxronizatsiya
+    await updateAllDataComplete();
+
+    console.log("✅ Tungi yangilanish muvaffaqiyatli yakunlandi");
   } catch (error) {
-    console.error("❌ Kunlik tozalashda xato:", error.message);
+    console.error("❌ Tungi yangilanishda xato:", error.message);
   }
 });
 

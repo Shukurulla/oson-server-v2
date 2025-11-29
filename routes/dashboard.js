@@ -138,12 +138,12 @@ router.get("/stats", async (req, res) => {
       // Bugungi revenue (MongoDB'dan)
       Sales.aggregate([
         { $match: { createdAt: { $gte: todayStart } } },
-        { $group: { _id: null, total: { $sum: "$buyAmount" } } },
+        { $group: { _id: null, total: { $sum: "$saleAmount" } } },
       ]).catch(() => []),
 
       // Umumiy revenue (barcha savdolar - MongoDB'dan)
       Sales.aggregate([
-        { $group: { _id: null, total: { $sum: "$buyAmount" } } },
+        { $group: { _id: null, total: { $sum: "$saleAmount" } } },
       ]).catch(() => []),
 
       // Sales with items
@@ -157,7 +157,7 @@ router.get("/stats", async (req, res) => {
           $group: {
             _id: "$items.product",
             totalSold: { $sum: "$items.quantity" },
-            totalRevenue: { $sum: "$items.buyAmount" },
+            totalRevenue: { $sum: "$items.salePrice" },
           },
         },
         { $sort: { totalSold: -1 } },
@@ -168,7 +168,7 @@ router.get("/stats", async (req, res) => {
       Sales.find({ hasItems: true })
         .sort({ createdAt: -1 })
         .limit(10)
-        .select("number soldAmount createdAt items")
+        .select("number saleAmount createdAt items")
         .lean()
         .catch(() => []),
 
@@ -277,7 +277,7 @@ router.get("/quick-stats", async (req, res) => {
       }),
       Sales.aggregate([
         { $match: { createdAt: { $gte: todayStart } } },
-        { $group: { _id: null, total: { $sum: "$soldAmount" } } },
+        { $group: { _id: null, total: { $sum: "$saleAmount" } } },
       ]),
     ]);
 
