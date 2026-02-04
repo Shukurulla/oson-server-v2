@@ -10,6 +10,7 @@ import {
   getRemainsBySupplier,
   getSalesItems,
   getSuppliers,
+  getRefreshStatus,
 } from "./refreshData.js";
 config();
 
@@ -391,7 +392,13 @@ const formatDoctorSalesPage = (pageData) => {
   message += `💵 *Общая сумма всех продаж: ${formatNumber(
     pageData.totalAmount || 0
   )} сум*\n`;
-  message += `🤖 _Нажмите на номер чека для деталей_\n`;
+  message += `🤖 _Нажмите на номер чека для деталей_\n\n`;
+
+  // Oxirgi yangilanish vaqti
+  const refreshStatus = getRefreshStatus();
+  if (refreshStatus.lastUpdate) {
+    message += `🕐 _Последнее обновление: ${formatDateTime(refreshStatus.lastUpdate)}_`;
+  }
 
   return message;
 };
@@ -421,7 +428,13 @@ const formatAllRemainsPage = (pageData) => {
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `📄 Страница ${pageData.currentPage} из ${pageData.totalPages}\n`;
   message += `📊 Всего товаров: ${pageData.totalRemains}\n`;
-  message += `🤖 _Показаны все товары с остатками_\n`;
+  message += `🤖 _Показаны все товары с остатками_\n\n`;
+
+  // Oxirgi yangilanish vaqti
+  const refreshStatus = getRefreshStatus();
+  if (refreshStatus.lastUpdate) {
+    message += `🕐 _Последнее обновление: ${formatDateTime(refreshStatus.lastUpdate)}_`;
+  }
 
   return message;
 };
@@ -548,7 +561,13 @@ const createProfessionalStatisticsMessage = async (supplier, supplierName) => {
 
     message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🤖 _Автоматический отчёт системы_\n`;
-    message += `⏰ _Обновлено: ${formatDateTime(new Date())}_`;
+    message += `⏰ _Обновлено: ${formatDateTime(new Date())}_\n`;
+
+    // Oxirgi yangilanish vaqti
+    const refreshStatus = getRefreshStatus();
+    if (refreshStatus.lastUpdate) {
+      message += `🕐 _Последнее обновление данных: ${formatDateTime(refreshStatus.lastUpdate)}_`;
+    }
 
     return message;
   } catch (error) {
@@ -1137,7 +1156,13 @@ const formatSaleDetails = (sale, items) => {
   }
 
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `🤖 _Детали продажи_\n`;
+  message += `🤖 _Детали продажи_\n\n`;
+
+  // Oxirgi yangilanish vaqti
+  const refreshStatus = getRefreshStatus();
+  if (refreshStatus.lastUpdate) {
+    message += `🕐 _Последнее обновление: ${formatDateTime(refreshStatus.lastUpdate)}_`;
+  }
 
   return message;
 };
