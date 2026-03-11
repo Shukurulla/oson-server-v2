@@ -240,7 +240,7 @@ export const getSalesItems = async (saleId) => {
     }
 
     const response = await axios.post(
-      "https://osonkassa.uz/api/pos/sales/items/get",
+      "http://osonkassa.uz/api/pos/sales/items/get",
       { saleId: saleId, pageNumber: 1, pageSize: 1000 },
       {
         headers: { authorization: `Bearer ${token}` },
@@ -265,7 +265,7 @@ export const getSuppliers = async () => {
   try {
     await login();
     const { data } = await axios.get(
-      "https://osonkassa.uz/api/purchase/suppliers",
+      "http://osonkassa.uz/api/purchase/suppliers",
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 20000,
@@ -282,7 +282,7 @@ export const getRemainsBySupplier = async (supplierId) => {
   try {
     await login();
     const { data } = await axios.post(
-      "https://osonkassa.uz/api/report/inventory/remains",
+      "http://osonkassa.uz/api/report/inventory/remains",
       {
         pageNumber: 1,
         pageSize: 1000,
