@@ -274,13 +274,13 @@ const fetchSupplierRemainsFromAPI = async (supplierName, page = 1) => {
     const getCleanName = (name) => {
       if (!name) return "";
       const match = name.match(/"(.*?)"/); // " " orasidagi textni topish
-      return match ? match[1].trim() : name.trim(); // agar yo‘q bo‘lsa, aslini qaytaradi
+      return match ? match[1].trim() : name.trim(); // agar yo'q bo'lsa, aslini qaytaradi
     };
 
     // 🔹 Kiruvchi supplier nomini tozalaymiz
     const cleanSupplierName = getCleanName(supplierName);
 
-    // 🔹 Ro‘yxatdan mos supplierni topamiz
+    // 🔹 Ro'yxatdan mos supplierni topamiz
     const supplier = suppliers.find((s) => {
       const cleanName = getCleanName(s.name);
       return cleanName === cleanSupplierName.toUpperCase();

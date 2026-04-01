@@ -42,7 +42,7 @@ try {
 
 // MongoDB ulangandan keyin import qilamiz
 await import("./utils/refreshData.js");
-// await import("./utils/telegramBot.js");
+await import("./utils/telegramBot.js");
 
 // Routes - middleware tekshiruvi bilan
 const useRoute = (path, route) => {

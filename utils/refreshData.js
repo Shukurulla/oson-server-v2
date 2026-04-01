@@ -37,7 +37,7 @@ const login = async () => {
           Accept: "application/json",
           tenantId: "biofarms",
         },
-      },
+      }
     );
 
     token = response.data.token;
@@ -71,7 +71,7 @@ const syncRemainsComplete = async () => {
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 10000,
-      },
+      }
     );
 
     const totalCount = firstResponse.data.page.totalCount || 0;
@@ -119,8 +119,8 @@ const syncRemainsComplete = async () => {
             {
               headers: { authorization: `Bearer ${token}` },
               timeout: 20000,
-            },
-          ),
+            }
+          )
         );
       }
 
@@ -139,8 +139,8 @@ const syncRemainsComplete = async () => {
       console.log(
         `✅ Remains: ${Math.min(
           i + PARALLEL_PAGES,
-          totalPages,
-        )}/${totalPages} sahifa olindi (${allRemains.length}/${totalCount})`,
+          totalPages
+        )}/${totalPages} sahifa olindi (${allRemains.length}/${totalCount})`
       );
     }
 
@@ -182,7 +182,7 @@ const syncRemainsComplete = async () => {
         console.log(
           `💾 Remains: ${Math.min(i + BATCH_SIZE, bulkOps.length)}/${
             bulkOps.length
-          } saqlandi`,
+          } saqlandi`
         );
       } catch (error) {
         console.error(`⚠️ Batch saqlashda xato:`, error.message);
@@ -204,7 +204,7 @@ const syncRemainsComplete = async () => {
     // Agar farq bo'lsa, ogohlantirish
     if (finalCount !== uniqueRemains.length) {
       console.error(
-        `❌ OGOHLANTIRISH: Kutilgan ${uniqueRemains.length}, lekin ${finalCount} ta saqlandi!`,
+        `❌ OGOHLANTIRISH: Kutilgan ${uniqueRemains.length}, lekin ${finalCount} ta saqlandi!`
       );
     } else {
       console.log(`   ✅ MA'LUMOTLAR TO'LIQ MOS KELADI! ✅`);
@@ -245,7 +245,7 @@ export const getSalesItems = async (saleId) => {
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 20000,
-      },
+      }
     );
 
     return response.data.page.items;
@@ -269,7 +269,7 @@ export const getSuppliers = async () => {
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 20000,
-      },
+      }
     );
     return data.items;
   } catch (error) {
@@ -296,14 +296,14 @@ export const getRemainsBySupplier = async (supplierId) => {
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 20000,
-      },
+      }
     );
 
     return data.page.items;
   } catch (error) {
     console.error(
       `❌ Remains olishda xato (Supplier ID: ${supplierId}):`,
-      error.message,
+      error.message
     );
     return [];
   }
@@ -326,20 +326,20 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
       {
         headers: { authorization: `Bearer ${token}` },
         timeout: 10000,
-      },
+      }
     );
 
     const totalCount = firstResponse.data.page.totalCount || 0;
 
     if (totalCount === 0) {
       console.log(
-        `📊 ${dateFrom} dan ${dateTo} gacha gacha hech qanday savdo yo'q`,
+        `📊 ${dateFrom} dan ${dateTo} gacha gacha hech qanday savdo yo'q`
       );
       return [];
     }
 
     console.log(
-      `📊 ${dateFrom} dan ${dateTo} gacha jami ${totalCount} ta savdo topildi`,
+      `📊 ${dateFrom} dan ${dateTo} gacha jami ${totalCount} ta savdo topildi`
     );
 
     // Barcha sales'larni olish - optimized (katta pageSize uchun tezlik)
@@ -367,8 +367,8 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
             {
               headers: { authorization: `Bearer ${token}` },
               timeout: 20000, // Timeoutni ko'paytirish
-            },
-          ),
+            }
+          )
         );
       }
 
@@ -394,7 +394,7 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
         } else if (response.status === "rejected") {
           console.error(
             `❌ Sales sahifasini olishda xato:`,
-            response.reason.message,
+            response.reason.message
           );
         }
       }
@@ -402,8 +402,8 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
       console.log(
         `✅ Sales pages: ${Math.min(
           i + PARALLEL_PAGES,
-          totalPages,
-        )}/${totalPages} olindi (${allSales.length}/${totalCount})`,
+          totalPages
+        )}/${totalPages} olindi (${allSales.length}/${totalCount})`
       );
 
       // Sahifalar orasida qisqa kutish (rate limit uchun)
@@ -423,7 +423,7 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
     const uniqueSales = Array.from(uniqueSalesMap.values());
 
     console.log(
-      `📊 ${dateFrom} dan ${dateTo} gacha jami ${allSales.length} ta sales olindi`,
+      `📊 ${dateFrom} dan ${dateTo} gacha jami ${allSales.length} ta sales olindi`
     );
     console.log(`🔍 ${uniqueSales.length} ta unikal sales aniqlandi`);
 
@@ -431,7 +431,7 @@ const fetchSalesIds = async (dateFrom, dateTo) => {
       console.warn(
         `⚠️ ${
           allSales.length - uniqueSales.length
-        } ta duplicate sales o'chirildi`,
+        } ta duplicate sales o'chirildi`
       );
     }
 
@@ -487,7 +487,7 @@ const saveSalesDirectly = async (sales) => {
       console.log(
         `💾 Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${
           result.upsertedCount
-        } yangi + ${result.modifiedCount} yangilandi`,
+        } yangi + ${result.modifiedCount} yangilandi`
       );
     }
 
@@ -517,7 +517,7 @@ const syncSalesWithDate = async (customDate = null) => {
         console.log(`📅 Tanlangan sana: ${dateFrom}`);
       } else {
         console.error(
-          `❌ Noto'g'ri sana formati: ${customDate}. YYYY-MM-DD formatini ishlating`,
+          `❌ Noto'g'ri sana formati: ${customDate}. YYYY-MM-DD formatini ishlating`
         );
         return { updated: 0, error: "Invalid date format" };
       }
@@ -535,7 +535,7 @@ const syncSalesWithDate = async (customDate = null) => {
     const startTime = Date.now();
 
     console.log(
-      `\n🔄 Sales sinxronizatsiya boshlandi - ${dateFrom} dan ${finalDateTo} gacha`,
+      `\n🔄 Sales sinxronizatsiya boshlandi - ${dateFrom} dan ${finalDateTo} gacha`
     );
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
@@ -554,7 +554,7 @@ const syncSalesWithDate = async (customDate = null) => {
     const duration = Math.round((endTime - startTime) / 1000);
 
     console.log(
-      `\n🎉 Sales sinxronizatsiya tugadi! (${dateFrom} - ${finalDateTo})`,
+      `\n🎉 Sales sinxronizatsiya tugadi! (${dateFrom} - ${finalDateTo})`
     );
     console.log(`   ⏱️ Vaqt: ${duration} sekund`);
     console.log(`   📊 Jami sales: ${sales.length}`);
@@ -574,110 +574,6 @@ const syncSalesWithDate = async (customDate = null) => {
     return { updated: 0, error: error.message };
   }
 };
-
-// YANGI: Backfill funksiyasi - 01.09.2025 dan hozirgi kungacha kunlik yuklash
-// const backfillSalesFromDateRange = async (
-//   startDate = "2025-09-01",
-//   endDate = null
-// ) => {
-//   if (refreshStatus.isRunning) {
-//     console.log("⏳ Backfill allaqachon ishlamoqda...");
-//     return;
-//   }
-
-//   refreshStatus.isRunning = true;
-//   refreshStatus.currentTask = "Backfill boshlandi";
-//   refreshStatus.progress = 0;
-//   refreshStatus.errors = [];
-
-//   const startTime = Date.now();
-
-//   try {
-//     console.log("\n🔥 OLINGI MALUMOTLAR BACKFILL BOSHLANDI!");
-//     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-//     // End date ni aniqlash (agar berilmagan bo'lsa, bugungi kun)
-//     let finalEndDate = endDate;
-//     if (!finalEndDate) {
-//       finalEndDate = new Date().toISOString().split("T")[0];
-//     }
-
-//     // Kunlarni hisoblash
-//     const start = new Date(startDate);
-//     const end = new Date(finalEndDate);
-//     const dates = [];
-//     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-//       dates.push(new Date(d).toISOString().split("T")[0]);
-//     }
-
-//     console.log(
-//       `📅 Backfill kunlari: ${startDate} dan ${finalEndDate} gacha (${dates.length} kun)`
-//     );
-
-//     let totalUpdated = 0;
-//     let processedDays = 0;
-
-//     // Sequential yuklash (rate limit uchun), lekin har kun ichida parallel
-//     for (const date of dates) {
-//       refreshStatus.currentTask = `Backfill: ${date}`;
-//       refreshStatus.progress = Math.round((processedDays / dates.length) * 100);
-
-//       // Token tekshirish
-//       if (!token) {
-//         await login();
-//         if (!token) {
-//           throw new Error("Login amalga oshmadi");
-//         }
-//       }
-
-//       const result = await syncSalesWithDate(date);
-
-//       if (result.updated > 0) {
-//         totalUpdated += result.updated;
-//         console.log(`✅ ${date}: ${result.updated} ta yangilandi`);
-//       } else {
-//         console.log(`📭 ${date}: Yangi ma'lumot yo'q`);
-//       }
-
-//       processedDays++;
-
-//       // Kunlar orasida qisqa kutish (optimal)
-//       if (processedDays < dates.length) {
-//         await new Promise((resolve) => setTimeout(resolve, 500));
-//       }
-//     }
-
-//     const endTime = Date.now();
-//     const duration = Math.round((endTime - startTime) / 1000);
-
-//     console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-//     console.log("🎉 BACKFILL MUVAFFAQIYATLI TUGADI!");
-//     console.log(`⏱️  Umumiy vaqt: ${duration} sekund`);
-//     console.log(`📊 Jami yangilangan sales: ${totalUpdated} ta`);
-//     console.log(`📅 Qamrab olingan kunlar: ${dates.length} ta`);
-
-//     refreshStatus.lastUpdate = new Date();
-//     refreshStatus.progress = 100;
-
-//     return {
-//       success: true,
-//       duration: duration,
-//       totalUpdated: totalUpdated,
-//       daysProcessed: dates.length,
-//     };
-//   } catch (error) {
-//     console.error("❌ Backfill xatosi:", error.message);
-//     refreshStatus.errors.push(`Backfill error: ${error.message}`);
-//     return {
-//       success: false,
-//       error: error.message,
-//     };
-//   } finally {
-//     refreshStatus.isRunning = false;
-//     refreshStatus.currentTask = null;
-//     refreshStatus.progress = 0;
-//   }
-// };
 
 // ASOSIY YANGILANUSH FUNKSIYASI - sana parametri bilan
 const updateAllDataComplete = async (customDate = null) => {
@@ -733,7 +629,7 @@ const updateAllDataComplete = async (customDate = null) => {
 
     if (salesResult.status === "fulfilled") {
       console.log(
-        `📊 Sales (${salesResult.value.dateFrom}): ${salesResult.value.updated} ta`,
+        `📊 Sales (${salesResult.value.dateFrom}): ${salesResult.value.updated} ta`
       );
     } else {
       console.error(`❌ Sales xatosi: ${salesResult.reason}`);
@@ -749,7 +645,7 @@ const updateAllDataComplete = async (customDate = null) => {
         console.log(`✅ MA'LUMOTLAR TO'LIQ MOS KELADI!`);
       } else {
         console.error(
-          `⚠️ FARQ BOR: Kutilgan ${remainsResult.value.expected}, Hozir ${remainsResult.value.total}`,
+          `⚠️ FARQ BOR: Kutilgan ${remainsResult.value.expected}, Hozir ${remainsResult.value.total}`
         );
       }
     } else {
@@ -831,7 +727,7 @@ const manualFullUpdate = (customDate = null) => {
   console.log(
     `📌 Manual to'liq yangilanish so'raldi${
       customDate ? ` - sana: ${customDate}` : ""
-    }`,
+    }`
   );
   updateAllDataComplete(customDate);
 };
@@ -841,7 +737,7 @@ const manualSalesUpdate = (customDate = null) => {
   console.log(
     `📌 Manual sales yangilanish so'raldi${
       customDate ? ` - sana: ${customDate}` : ""
-    }`,
+    }`
   );
 
   if (refreshStatus.isRunning) {
@@ -866,7 +762,7 @@ const manualSalesUpdate = (customDate = null) => {
       const result = await syncSalesWithDate(customDate);
 
       console.log(
-        `✅ Sales yangilanishi tugadi: ${result.updated} ta yangilandi`,
+        `✅ Sales yangilanishi tugadi: ${result.updated} ta yangilandi`
       );
     } catch (error) {
       console.error("❌ Manual sales yangilanishida xato:", error.message);
@@ -920,7 +816,7 @@ setInterval(async () => {
       const time = new Date().toLocaleTimeString("uz-UZ");
       console.log(`\n📊 [${time}] TIZIM MONITORINGI:`);
       console.log(
-        `   💊 Remains: ${stats.remains.total} ta (${stats.remains.manufacturers} ishlab chiqaruvchi)`,
+        `   💊 Remains: ${stats.remains.total} ta (${stats.remains.manufacturers} ishlab chiqaruvchi)`
       );
       console.log(`   💰 Sales: ${stats.sales.total} ta`);
       console.log(`   📅 Bugun: ${stats.sales.today} ta savdo`);
