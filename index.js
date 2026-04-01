@@ -3,17 +3,14 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 
+dotenv.config();
+
 import authRoutes from "./routes/auth.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import doctorsRoutes from "./routes/doctors.js";
 import suppliersRoutes from "./routes/suppliers.js";
 import backgroundRoutes from "./routes/background.js";
 import messageRoutes from "./routes/messages.js";
-
-import "./utils/refreshData.js";
-// import "./utils/telegramBot.js";
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5009;
@@ -25,24 +22,27 @@ app.use(express.json());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-mongoose.connect(
-  process.env.MONGODB_URI || "mongodb://localhost:27017/pharmacy",
-  {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-  }
-);
-
-mongoose.connection.on("connected", () => {
+// MongoDB ga avval ulanamiz, keyin server ishga tushadi
+try {
+  await mongoose.connect(
+    process.env.MONGODB_URI || "mongodb://localhost:27017/pharmacy",
+    {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 15000,
+      socketTimeoutMS: 45000,
+    }
+  );
   console.log("✅ MongoDB ga ulandi");
-});
+} catch (err) {
+  console.error("❌ MongoDB ga ulanib bo'lmadi:", err.message);
+  process.exit(1);
+}
 
-mongoose.connection.on("error", (err) => {
-  console.error("❌ MongoDB xato:", err);
-});
+// MongoDB ulangandan keyin import qilamiz
+await import("./utils/refreshData.js");
+// await import("./utils/telegramBot.js");
 
 // Routes - middleware tekshiruvi bilan
 const useRoute = (path, route) => {
